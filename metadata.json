@@ -1,0 +1,8 @@
+{
+  "name": "DebateCoach",
+  "description": "AI-powered real-time speech coaching agent.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
