@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 
 export function OverallScoreRing({ score }: { score: number }) {
     const radius = 36;

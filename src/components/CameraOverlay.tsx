@@ -1,6 +1,7 @@
 import { Eye, Activity, User } from 'lucide-react';
+import { IndicatorData } from '../types';
 
-export function CameraOverlay({ data }: { data: any }) {
+export function CameraOverlay({ data }: { data: IndicatorData }) {
   if (!data) return null;
 
   const getPaceColor = (pace: string) => {

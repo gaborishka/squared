@@ -1,14 +1,15 @@
 import { useState, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
+import { IndicatorData } from '../types';
 
-export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', onIndicatorsUpdate?: (data: any) => void }) {
+export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', onIndicatorsUpdate?: (data: IndicatorData) => void }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isSpeakingRef = useRef(false);
 
-  const sessionRef = useRef<any>(null);
+  const sessionRef = useRef<Promise<unknown> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -230,7 +231,12 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             workletNode.port.onmessage = (e) => {
               if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
               const pcm16 = new Int16Array(e.data);
-              const base64Data = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+              const bytes = new Uint8Array(pcm16.buffer);
+              let binaryString = '';
+              for (let i = 0; i < bytes.length; i++) {
+                binaryString += String.fromCharCode(bytes[i]);
+              }
+              const base64Data = btoa(binaryString);
               withOpenSession((session) => {
                 try {
                   session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'audio/pcm;rate=16000' } });
@@ -357,7 +363,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
                   overallScore: call.args?.overallScore,
                   latencyNote: 'Check gap between video frame sends and this timestamp'
                 });
-                onIndicatorsUpdate(call.args);
+                onIndicatorsUpdate(call.args as unknown as IndicatorData);
                 // Send tool response
                 withOpenSession((session) => {
                   try {

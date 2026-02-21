@@ -8,6 +8,8 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
+      // NOTE: In Google AI Studio, the API key is injected at runtime from user secrets
+      // and never exposed to end users. For any other deployment, use a server-side proxy.
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
     resolve: {

@@ -1,7 +1,8 @@
 import { MessageSquare, AlertCircle } from 'lucide-react';
+import { IndicatorData } from '../types';
 
-export function Indicators({ data }: { data: any }) {
-    const fillerCount = data.fillerWords?.total ?? data.fillerWordsCount ?? 0;
+export function Indicators({ data }: { data: IndicatorData }) {
+    const fillerCount = data.fillerWords?.total ?? 0;
 
     return (
         <div className="space-y-6">

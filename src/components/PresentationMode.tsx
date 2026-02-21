@@ -3,15 +3,44 @@ import { ArrowLeft, Activity } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { Indicators } from './Indicators';
 import { CameraOverlay } from './CameraOverlay';
+import { IndicatorData } from '../types';
 
 export function PresentationMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [indicators, setIndicators] = useState<any>(null);
-  
+  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const previewStreamRef = useRef<MediaStream | null>(null);
+
   const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
     mode: 'presentation',
     onIndicatorsUpdate: setIndicators
   });
+
+  useEffect(() => {
+    async function startPreview() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        previewStreamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        console.warn("Could not get preview stream", err);
+      }
+    }
+    startPreview();
+
+    return () => {
+      if (previewStreamRef.current) {
+        previewStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected && videoRef.current && previewStreamRef.current) {
+      videoRef.current.srcObject = previewStreamRef.current;
+    }
+  }, [isConnected]);
 
   useEffect(() => {
     return () => disconnect();

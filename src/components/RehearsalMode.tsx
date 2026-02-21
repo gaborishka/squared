@@ -5,6 +5,7 @@ import { SessionInsights } from './SessionInsights';
 import { CameraOverlay } from './CameraOverlay';
 import { AnalyzingPulse } from './AnalyzingPulse';
 import { FeedbackItem } from './FeedbackTimeline';
+import { IndicatorData } from '../types';
 
 const AGENT_BIN_INDICES = [1, 2, 4, 6];
 const AGENT_IDLE_SCALE = 0.22;
@@ -182,7 +183,7 @@ const AgentWaveform = ({ analyser, isSpeaking }: { analyser: AnalyserNode | null
 export function RehearsalMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const insightsPanelRef = useRef<HTMLDivElement>(null);
-  const [indicators, setIndicators] = useState<any>(null);
+  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const sessionStartTimeRef = useRef<number | null>(null);
@@ -209,7 +210,7 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
       }
     };
   }, []);
-  const handleIndicatorsUpdate = (data: any) => {
+  const handleIndicatorsUpdate = (data: IndicatorData) => {
     setIndicators(data);
 
     if (data.feedbackMessage) {

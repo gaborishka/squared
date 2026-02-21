@@ -4,9 +4,10 @@ import { AudioWaveform } from './AudioWaveform';
 import { FillerWordsBubbles } from './FillerWordsBubbles';
 import { FeedbackTimeline, FeedbackItem } from './FeedbackTimeline';
 import { ShieldAlert, ShieldCheck, Shield } from 'lucide-react';
+import { IndicatorData } from '../types';
 
 interface SessionInsightsProps {
-    data: any;
+    data: IndicatorData;
     feedbackHistory: FeedbackItem[];
     analyserRef?: MutableRefObject<AnalyserNode | null>;
 }
