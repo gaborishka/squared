@@ -1,5 +1,5 @@
 {
-  "name": "DebateCoach",
+  "name": "Squared",
   "description": "AI-powered real-time speech coaching agent.",
   "requestFramePermissions": [
     "camera",

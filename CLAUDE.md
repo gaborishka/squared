@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DebateCoach — an AI-powered real-time speech coaching app built for Google AI Studio. Uses Google Gemini 2.5 Flash Live API for two modes: **Rehearsal** (interactive voice feedback with AI interruptions) and **Presentation** (silent visual-only HUD feedback during live presentations). Requires camera and microphone permissions.
+Squared — an AI-powered real-time speech coaching app built for Google AI Studio. Uses Google Gemini 2.5 Flash Live API for two modes: **Rehearsal** (interactive voice feedback with AI interruptions) and **Presentation** (silent visual-only HUD feedback during live presentations). Requires camera and microphone permissions.
 
 ## Commands
 

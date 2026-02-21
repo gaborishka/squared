@@ -9,7 +9,8 @@ export function Home({ onSelectMode }: { onSelectMode: (mode: 'rehearsal' | 'pre
         animate={{ opacity: 1, y: 0 }}
         className="text-center mb-16"
       >
-        <h1 className="text-5xl font-bold tracking-tight mb-4">DebateCoach</h1>
+        <img src="/logo-squared-v5.svg" alt="Squared logo" className="h-24 md:h-32 w-auto mx-auto mb-6" />
+        <h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-4">Squared</h1>
         <p className="text-xl text-zinc-400">AI-powered real-time speech coaching.</p>
       </motion.div>
 

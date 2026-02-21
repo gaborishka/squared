@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a14" />
+      <stop offset="100%" style="stop-color:#141428" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#ff3d5a" />
+      <stop offset="100%" style="stop-color:#ff8c42" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="400" height="400" rx="48" fill="url(#bg)"/>
+  
+  <!-- Gemini's geometric mark recreated -->
+  <!-- Grid unit: 32px, icon centered around x=200 -->
+  
+  <!-- Head: two top squares -->
+  <rect x="136" y="52" width="48" height="48" fill="url(#accent)"/>
+  <rect x="216" y="52" width="48" height="48" fill="url(#accent)"/>
+  
+  <!-- Neck connectors: two small squares -->
+  <rect x="120" y="100" width="48" height="36" fill="url(#accent)"/>
+  <rect x="232" y="100" width="48" height="36" fill="url(#accent)"/>
+  
+  <!-- Center neck block -->
+  <rect x="184" y="100" width="32" height="20" fill="url(#accent)"/>
+  
+  <!-- Bottom-left shoulder bracket (L-shape) -->
+  <rect x="88" y="152" width="48" height="48" fill="url(#accent)"/>
+  <rect x="88" y="200" width="96" height="48" fill="url(#accent)"/>
+  
+  <!-- Bottom-right shoulder bracket (L-shape) -->
+  <rect x="264" y="152" width="48" height="48" fill="url(#accent)"/>
+  <rect x="216" y="200" width="96" height="48" fill="url(#accent)"/>
+
+  <!-- Typography -->
+  <text x="200" y="304" 
+        font-family="'Manrope', 'Sora', 'Helvetica Neue', sans-serif" 
+        font-weight="800" 
+        font-size="46" 
+        fill="#ffffff" 
+        text-anchor="middle" 
+        letter-spacing="6">SQUARED</text>
+  
+  <text x="200" y="336" 
+        font-family="'Manrope', 'Sora', 'Helvetica Neue', sans-serif" 
+        font-weight="300" 
+        font-size="11.5" 
+        fill="url(#accent)" 
+        text-anchor="middle" 
+        letter-spacing="5.5">SQUARE YOUR SHOULDERS</text>
+</svg>

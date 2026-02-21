@@ -4,7 +4,7 @@
 This file is guidance for coding agents working in this repository.
 
 ## Project Summary
-- App name: `DebateCoach`
+- App name: `Squared`
 - Type: Vite + React + TypeScript single-page app
 - Primary feature: Real-time speech coaching using Google Gemini Live API
 - Modes:

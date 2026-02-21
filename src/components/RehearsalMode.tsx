@@ -215,11 +215,6 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
 
     if (data.feedbackMessage) {
       setFeedbackHistory(prev => {
-        // Only add if it's a new message
-        if (prev.length > 0 && prev[0].message === data.feedbackMessage) {
-          return prev;
-        }
-
         let timeStr = "00:00";
         if (sessionStartTimeRef.current) {
           const diffMs = Date.now() - sessionStartTimeRef.current;
