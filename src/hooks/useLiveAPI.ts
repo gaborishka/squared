@@ -22,9 +22,25 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
       if (!apiKey) throw new Error("API Key is missing");
       const ai = new GoogleGenAI({ apiKey });
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      } catch (err: any) {
+        console.warn("Failed to get audio+video stream, trying audio only", err);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (audioErr: any) {
+          if (audioErr.name === 'NotAllowedError' || audioErr.message === 'Permission denied') {
+            throw new Error("Camera/Microphone access denied. Please allow permissions in your browser's URL bar or settings.");
+          }
+          throw new Error(`Media access error: ${audioErr.message}`);
+        }
+      }
+      
       streamRef.current = stream;
-      videoElement.srcObject = stream;
+      if (videoElement && stream.getVideoTracks().length > 0) {
+        videoElement.srcObject = stream;
+      }
 
       // Setup Audio Capture
       const audioContext = new AudioContext({ sampleRate: 16000 });
@@ -103,19 +119,21 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             };
 
             // Video frames
-            videoIntervalRef.current = window.setInterval(() => {
-              const canvas = document.createElement('canvas');
-              canvas.width = videoElement.videoWidth || 640;
-              canvas.height = videoElement.videoHeight || 480;
-              const ctx = canvas.getContext('2d');
-              if (ctx && videoElement.readyState >= 2) {
-                ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
-                sessionPromise.then(session => {
-                  session.sendRealtimeInput({ media: { data: base64Image, mimeType: 'image/jpeg' } });
-                });
-              }
-            }, 2000); // 0.5 fps to save bandwidth
+            if (stream.getVideoTracks().length > 0) {
+              videoIntervalRef.current = window.setInterval(() => {
+                const canvas = document.createElement('canvas');
+                canvas.width = videoElement.videoWidth || 640;
+                canvas.height = videoElement.videoHeight || 480;
+                const ctx = canvas.getContext('2d');
+                if (ctx && videoElement.readyState >= 2) {
+                  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                  const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+                  sessionPromise.then(session => {
+                    session.sendRealtimeInput({ media: { data: base64Image, mimeType: 'image/jpeg' } });
+                  });
+                }
+              }, 2000); // 0.5 fps to save bandwidth
+            }
           },
           onmessage: async (message: LiveServerMessage) => {
             if (message.serverContent?.modelTurn) {

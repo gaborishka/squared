@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Activity } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { Indicators } from './Indicators';
+import { CameraOverlay } from './CameraOverlay';
 
 export function PresentationMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,9 +49,12 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
             className="w-full h-full object-cover"
           />
           
+          {/* HUD Overlay for Camera */}
+          {indicators && <CameraOverlay data={indicators} />}
+
           {/* Overlay Indicators - HUD style */}
           {indicators && (
-            <div className="absolute top-6 right-6 flex flex-col gap-3">
+            <div className="absolute top-20 right-6 flex flex-col gap-3 z-10">
               {indicators.feedbackMessage && (
                 <div className="bg-zinc-950/80 backdrop-blur-md border border-zinc-800 text-white px-4 py-3 rounded-xl shadow-lg max-w-xs animate-in fade-in slide-in-from-top-4">
                   <p className="text-sm font-medium">{indicators.feedbackMessage}</p>
@@ -60,7 +64,7 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
           )}
 
           {/* Overlay Controls */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
             <button 
               onClick={handleToggleConnect}
               className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
@@ -74,7 +78,7 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
           </div>
 
           {error && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md">
+            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md z-10">
               {error}
             </div>
           )}

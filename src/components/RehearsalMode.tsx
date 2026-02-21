@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Activity } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { Indicators } from './Indicators';
+import { CameraOverlay } from './CameraOverlay';
 
 export function RehearsalMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,8 +49,11 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
             className="w-full h-full object-cover"
           />
           
+          {/* HUD Overlay for Camera */}
+          {indicators && <CameraOverlay data={indicators} />}
+          
           {/* Overlay Controls */}
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
             <button 
               onClick={handleToggleConnect}
               className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
@@ -63,7 +67,7 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
           </div>
 
           {error && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md">
+            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md z-10">
               {error}
             </div>
           )}
