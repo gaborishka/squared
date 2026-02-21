@@ -81,7 +81,12 @@ Note: `fillerWordsCount` replaced by `fillerWords` object with `total` and `brea
 - Updates in real-time
 
 ### Section 2: Metric Cards (2-column grid)
-- Volume: icon + status text + color indicator dot
+- Volume: **live audio waveform/equalizer** instead of static text
+  - Small animated bars (5-7 vertical bars) showing real-time audio amplitude
+  - Color shifts: green (good range), amber (too quiet), red (too loud)
+  - Data source: tap into existing AudioContext worklet to extract amplitude
+  - When no audio: bars at minimum height, subtle idle pulse
+  - Gives the panel a "live/listening" feel
 - Confidence: icon + numeric score + color indicator dot
 - Card style: bg-zinc-950, border-zinc-800, rounded-xl
 - Color dots: green (good), amber (warning), red (bad)
@@ -99,13 +104,29 @@ Note: `fillerWordsCount` replaced by `fillerWords` object with `total` and `brea
 
 ### Section 4: Coach Feedback Timeline
 - Scrollable container (flex-1, overflow-y-auto)
-- Each entry: relative timestamp + message
+- Each entry: relative timestamp + category icon + message
 - Timestamp = time since session start (mm:ss)
-- New entries appear at top with fade-in animation
+- **Category icons** on each feedback card for fast scanning:
+  - 👁 Eye icon — eye contact / visual feedback
+  - 🎤 Mic icon — volume, pace, audio-related feedback
+  - 🧍 User icon — posture / body language feedback
+  - 💬 MessageSquare icon — general / filler words feedback
+  - Icon selection based on keyword matching in feedbackMessage
+- New entries appear at top with slide-in animation (motion library)
 - Left border color:
   - Green: positive/encouraging feedback
   - Amber: corrective feedback
+  - Red: critical issues
 - Store feedback history in React state array
+
+## Premium Idle / Waiting State
+
+When session is connected but no data has arrived yet:
+- Replace static placeholder text with animated "listening" state
+- Concentric pulsing circles animation (motion library, 3 rings expanding outward)
+- Text: "Analyzing your speech and presence..."
+- Subtle glow effect on the rings
+- Transitions smoothly to real data when first indicators arrive
 
 ## State Changes
 
@@ -125,4 +146,6 @@ In `RehearsalMode.tsx`:
 
 1. **`OverallScoreRing.tsx`** — SVG circular progress component
 2. **`FillerWordsBubbles.tsx`** — bubble/chip grid with hover counts
-3. **`FeedbackTimeline.tsx`** — scrollable timeline component
+3. **`FeedbackTimeline.tsx`** — scrollable timeline with category icons
+4. **`AudioWaveform.tsx`** — live audio amplitude visualizer (5-7 animated bars)
+5. **`AnalyzingPulse.tsx`** — premium idle state with concentric pulsing circles
