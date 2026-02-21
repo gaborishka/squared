@@ -89,7 +89,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("API Key is missing");
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({ apiKey, httpOptions: {"apiVersion": "v1alpha"} });
 
       let stream: MediaStream;
       try {
@@ -188,6 +188,11 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
         model: "gemini-2.5-flash-native-audio-latest",
         config: {
           responseModalities: [Modality.AUDIO],
+          proactivity: { proactiveAudio: true },
+          // thinkingConfig: {
+          //   thinkingBudget: 0,
+          // },
+          enableAffectiveDialog: true,
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
           },

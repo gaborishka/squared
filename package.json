@@ -1,7 +1,10 @@
 {
-  "name": "react-example",
+  "name": "squared",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "AI-powered real-time speech coaching.",
+  "author": "Ivan Habor",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
