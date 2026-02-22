@@ -22,6 +22,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
   const speechStopTimeoutRef = useRef<number | null>(null);
   const isSocketOpenRef = useRef(false);
   const isSessionReadyRef = useRef(false);
+  const indicatorIntervalRef = useRef<number | null>(null);
 
   const setSpeakingState = useCallback((value: boolean) => {
     if (isSpeakingRef.current === value) return;
@@ -75,6 +76,10 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
     if (videoIntervalRef.current) {
       clearInterval(videoIntervalRef.current);
       videoIntervalRef.current = null;
+    }
+    if (indicatorIntervalRef.current) {
+      clearInterval(indicatorIntervalRef.current);
+      indicatorIntervalRef.current = null;
     }
     setIsConnected(false);
     setIsConnecting(false);
@@ -274,6 +279,49 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
                 }
               }, 1000); // 1 fps — balance between latency and bandwidth
             }
+
+            // Periodic generateContent for continuous visual indicator updates
+            // Runs independently of Live session turn-taking
+            if (onIndicatorsUpdate && stream.getVideoTracks().length > 0) {
+              let indicatorRequestInFlight = false;
+              indicatorIntervalRef.current = window.setInterval(async () => {
+                if (indicatorRequestInFlight) return;
+                if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+                try {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = videoElement.videoWidth || 640;
+                  canvas.height = videoElement.videoHeight || 480;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx || videoElement.readyState < 2) return;
+                  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                  const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
+
+                  indicatorRequestInFlight = true;
+                  const response = await ai.models.generateContent({
+                    model: "gemini-2.5-flash",
+                    contents: [{
+                      role: "user",
+                      parts: [
+                        { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
+                        { text: "You are a speech coach analyzing a speaker. Based on this video frame, provide a JSON object with these exact fields: pace (string: 'Good', 'Too Fast', 'Too Slow'), eyeContact (string: 'Looking at camera', 'Looking away'), posture (string: 'Good', 'Slouching'), confidenceScore (number 1-100), volumeLevel (string: 'Good'), overallScore (number 1-100). Do NOT include feedbackMessage or fillerWords. Respond ONLY with the JSON object, no markdown." }
+                      ]
+                    }],
+                    config: {
+                      responseMimeType: "application/json",
+                    }
+                  });
+                  const text = response.text?.trim();
+                  if (text) {
+                    const data = JSON.parse(text);
+                    onIndicatorsUpdate(data);
+                  }
+                } catch (err) {
+                  console.warn("[DebateCoach] Indicator generateContent error:", err);
+                } finally {
+                  indicatorRequestInFlight = false;
+                }
+              }, 3000);
+            }
           },
           onmessage: async (message: LiveServerMessage) => {
             if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) {
@@ -361,7 +409,6 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             if (message.toolCall) {
               const call = message.toolCall.functionCalls.find(fc => fc.name === 'updateIndicators');
               if (call && onIndicatorsUpdate) {
-                const receiveTime = performance.now();
                 console.debug(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
                   pace: call.args?.pace,
                   eyeContact: call.args?.eyeContact,
