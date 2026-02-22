@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowLeft, Activity } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { SessionInsights } from './SessionInsights';
 import { CameraOverlay } from './CameraOverlay';
 import { AnalyzingPulse } from './AnalyzingPulse';
 import { FeedbackItem } from './FeedbackTimeline';
-import { IndicatorData } from '../types';
+import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
 
 const AGENT_BIN_INDICES = [1, 2, 4, 6];
 const AGENT_IDLE_SCALE = 0.22;
@@ -188,32 +188,44 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const sessionStartTimeRef = useRef<number | null>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+  const liveSessionActiveRef = useRef(false);
 
-  // Initialize preview stream on mount
-  useEffect(() => {
-    async function startPreview() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        previewStreamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.warn("Could not get preview stream", err);
-      }
+  const stopPreview = useCallback(() => {
+    const previewStream = previewStreamRef.current;
+    if (previewStream) {
+      previewStream.getTracks().forEach(track => track.stop());
+      previewStreamRef.current = null;
     }
-    startPreview();
-
-    return () => {
-      if (previewStreamRef.current) {
-        previewStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
+    if (videoRef.current && videoRef.current.srcObject === previewStream) {
+      videoRef.current.srcObject = null;
+    }
   }, []);
-  const handleIndicatorsUpdate = (data: IndicatorData) => {
-    setIndicators(data);
 
-    if (data.feedbackMessage) {
+  const startPreview = useCallback(async () => {
+    if (previewStreamRef.current || liveSessionActiveRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (liveSessionActiveRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      previewStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.warn("Could not get preview stream", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => stopPreview();
+  }, [stopPreview]);
+
+  const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
+    setIndicators(prev => mergeIndicatorData(prev, update));
+
+    if (update.feedbackMessage?.trim()) {
       setFeedbackHistory(prev => {
         let timeStr = "00:00";
         if (sessionStartTimeRef.current) {
@@ -226,18 +238,22 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
         const newItem: FeedbackItem = {
           id: Math.random().toString(36).substring(7),
           timestamp: timeStr,
-          message: data.feedbackMessage
+          message: update.feedbackMessage
         };
 
         return [newItem, ...prev]; // Prepend new items
       });
     }
-  };
+  }, []);
 
   const { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking } = useLiveAPI({
     mode: 'rehearsal',
     onIndicatorsUpdate: handleIndicatorsUpdate
   });
+
+  useEffect(() => {
+    liveSessionActiveRef.current = isConnected || isConnecting;
+  }, [isConnected, isConnecting]);
 
   useEffect(() => {
     if (isConnected) {
@@ -254,13 +270,16 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
       sessionStartTimeRef.current = null;
       setIndicators(null);
       setFeedbackHistory([]);
-
-      // Restore preview stream if we just disconnected
-      if (videoRef.current && previewStreamRef.current) {
-        videoRef.current.srcObject = previewStreamRef.current;
-      }
     }
   }, [isConnected]);
+
+  useEffect(() => {
+    if (isConnected || isConnecting) {
+      stopPreview();
+      return;
+    }
+    startPreview();
+  }, [isConnected, isConnecting, startPreview, stopPreview]);
 
   useEffect(() => {
     return () => disconnect();
@@ -339,6 +358,7 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
     if (isConnected || isConnecting) {
       disconnect();
     } else if (videoRef.current) {
+      stopPreview();
       connect(videoRef.current);
     }
   };
@@ -401,17 +421,8 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
               Session Insights
             </h3>
             {isConnected ? (
-              <SessionInsights
-                data={indicators ?? {
-                  pace: 'Analyzing...',
-                  eyeContact: 'Analyzing...',
-                  posture: 'Analyzing...',
-                  fillerWords: { total: 0, breakdown: {} },
-                  feedbackMessage: '',
-                  confidenceScore: 0,
-                  volumeLevel: 'Good',
-                  overallScore: 0,
-                }}
+                <SessionInsights
+                data={indicators ?? DEFAULT_INDICATORS}
                 feedbackHistory={feedbackHistory}
                 analyserRef={analyserRef}
               />

@@ -15,15 +15,17 @@ export function CameraOverlay({ data }: { data: IndicatorData }) {
   const getEyeContactColor = (eye: string) => {
     if (!eye) return 'bg-zinc-900/80 text-zinc-400';
     const lower = eye.toLowerCase();
-    if (lower.includes('away') || lower.includes('no') || lower.includes('down')) return 'bg-red-500/90 text-white';
-    if (lower.includes('camera') || lower.includes('good') || lower.includes('looking')) return 'bg-emerald-500/90 text-white';
+    if (lower.includes('looking away') || lower.includes('around') || lower.includes('down')) return 'bg-red-500/90 text-white';
+    if (lower.includes('glancing') || lower.includes('not visible') || lower.includes('face not')) return 'bg-amber-500/90 text-white';
+    if (lower.includes('camera') || lower.includes('good') || lower.includes('direct')) return 'bg-emerald-500/90 text-white';
     return 'bg-zinc-900/80 text-zinc-200';
   };
 
   const getPostureColor = (posture: string) => {
     if (!posture) return 'bg-zinc-900/80 text-zinc-400';
     const lower = posture.toLowerCase();
-    if (lower.includes('slouch') || lower.includes('bad')) return 'bg-amber-500/90 text-white';
+    if (lower.includes('slouch') || lower.includes('bad')) return 'bg-red-500/90 text-white';
+    if (lower.includes('watch') || lower.includes('not visible') || lower.includes('posture not')) return 'bg-amber-500/90 text-white';
     if (lower.includes('good') || lower.includes('straight') || lower.includes('upright')) return 'bg-emerald-500/90 text-white';
     return 'bg-zinc-900/80 text-zinc-200';
   };

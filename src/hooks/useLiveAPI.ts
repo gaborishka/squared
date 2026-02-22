@@ -1,8 +1,249 @@
 import { useState, useRef, useCallback } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality, Type } from '@google/genai';
-import { IndicatorData } from '../types';
+import { GoogleGenAI, LiveServerMessage, Modality, Type, ActivityHandling, TurnCoverage, Behavior, FunctionResponseScheduling } from '@google/genai';
+import { FilesetResolver, FaceLandmarker, FaceLandmarkerResult, NormalizedLandmark, PoseLandmarker, PoseLandmarkerResult } from '@mediapipe/tasks-vision';
+import { IndicatorUpdate } from '../types';
 
-export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', onIndicatorsUpdate?: (data: IndicatorData) => void }) {
+const TRANSCRIPT_PACE_WINDOW_MS = 20000;
+const DERIVED_INDICATOR_TICK_MS = 500;
+const RECENT_SPEECH_MS = 3000;
+const MIN_PACE_SAMPLE_MS = 5000;
+const LOCAL_VISUAL_TICK_MS = 120;
+const LOCAL_VISUAL_LOSS_TICKS = 6;
+const MAJORITY_WINDOW_SIZE = 12;
+const MAJORITY_THRESHOLD = 0.6;
+const CALIBRATION_READINGS = 25;
+const MEDIAPIPE_WASM_BASE_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.32/wasm';
+const FACE_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const POSE_LANDMARKER_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+
+const WORD_PATTERN = /[A-Za-zА-Яа-яІіЇїЄєҐґ']+/g;
+const FILLER_SINGLE_WORDS = new Set([
+  'um',
+  'uh',
+  'erm',
+  'hmm',
+  'like',
+  'basically',
+  'actually',
+  'literally',
+  'ну',
+  'ее',
+  'ем',
+  'типу',
+  'короче',
+  'значить',
+  'якби',
+]);
+const FILLER_PHRASE_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+  { label: 'you know', pattern: /\byou\s+know\b/g },
+  { label: 'i mean', pattern: /\bi\s+mean\b/g },
+];
+
+const tokenizeWords = (text: string) => text.match(WORD_PATTERN)?.map(word => word.toLowerCase()) ?? [];
+
+type MajorityVoter = {
+  window: string[];
+  current: string;
+};
+
+const createMajorityVoter = (initial = 'Analyzing...'): MajorityVoter => ({
+  window: [],
+  current: initial,
+});
+
+const advanceMajorityVote = (voter: MajorityVoter, next: string): boolean => {
+  voter.window.push(next);
+  if (voter.window.length > MAJORITY_WINDOW_SIZE) {
+    voter.window.shift();
+  }
+  if (voter.window.length < 3) return false;
+
+  const counts: Record<string, number> = {};
+  for (const v of voter.window) {
+    counts[v] = (counts[v] ?? 0) + 1;
+  }
+
+  const threshold = Math.ceil(voter.window.length * MAJORITY_THRESHOLD);
+  for (const [value, count] of Object.entries(counts)) {
+    if (count >= threshold && value !== voter.current) {
+      voter.current = value;
+      return true;
+    }
+  }
+  return false;
+};
+
+type CalibrationState = {
+  done: boolean;
+  samples: number[];
+  baseline: number;
+  mad: number;
+};
+
+const createCalibrationState = (): CalibrationState => ({
+  done: false, samples: [], baseline: 0, mad: 0,
+});
+
+const median = (arr: number[]) => {
+  const sorted = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+const finalizeCalibration = (state: CalibrationState) => {
+  state.baseline = median(state.samples);
+  const deviations = state.samples.map(v => Math.abs(v - state.baseline));
+  state.mad = Math.max(median(deviations), 0.02);
+  state.done = true;
+};
+
+const getLandmark = (landmarks: NormalizedLandmark[], index: number) => landmarks[index] ?? null;
+
+const averageLandmarks = (points: Array<NormalizedLandmark | null>): NormalizedLandmark | null => {
+  const filtered = points.filter((point): point is NormalizedLandmark => Boolean(point));
+  if (filtered.length === 0) return null;
+  let sumX = 0;
+  let sumY = 0;
+  let sumVisibility = 0;
+  for (const point of filtered) {
+    sumX += point.x;
+    sumY += point.y;
+    sumVisibility += point.visibility;
+  }
+  return {
+    x: sumX / filtered.length,
+    y: sumY / filtered.length,
+    z: 0,
+    visibility: sumVisibility / filtered.length,
+  };
+};
+
+const distance2d = (a: NormalizedLandmark, b: NormalizedLandmark) => Math.hypot(a.x - b.x, a.y - b.y);
+
+type EyeContactResult = { level: string; faceRatio: number };
+
+const evaluateEyeContact = (result: FaceLandmarkerResult): EyeContactResult | null => {
+  const landmarks = result.faceLandmarks[0];
+  if (!landmarks?.length) return null;
+
+  const nose = getLandmark(landmarks, 1);
+  const leftOuter = getLandmark(landmarks, 33);
+  const leftInner = getLandmark(landmarks, 133);
+  const rightInner = getLandmark(landmarks, 362);
+  const rightOuter = getLandmark(landmarks, 263);
+  const forehead = getLandmark(landmarks, 10);
+  const chin = getLandmark(landmarks, 152);
+  if (!nose || !leftOuter || !leftInner || !rightInner || !rightOuter || !forehead || !chin) return null;
+
+  const interocularDistance = distance2d(leftInner, rightInner);
+  if (interocularDistance < 0.0001) return null;
+
+  const eyeCenter = averageLandmarks([leftOuter, leftInner, rightInner, rightOuter]);
+  if (!eyeCenter) return null;
+  const absYaw = Math.abs((nose.x - eyeCenter.x) / interocularDistance);
+
+  const faceHeight = distance2d(forehead, chin);
+  const faceRatio = faceHeight / interocularDistance;
+
+  // Iris-based horizontal gaze
+  const leftIris = averageLandmarks([
+    getLandmark(landmarks, 468),
+    getLandmark(landmarks, 469),
+    getLandmark(landmarks, 470),
+    getLandmark(landmarks, 471),
+    getLandmark(landmarks, 472),
+  ]);
+  const rightIris = averageLandmarks([
+    getLandmark(landmarks, 473),
+    getLandmark(landmarks, 474),
+    getLandmark(landmarks, 475),
+    getLandmark(landmarks, 476),
+    getLandmark(landmarks, 477),
+  ]);
+
+  const leftEyeCenter = averageLandmarks([leftOuter, leftInner]);
+  const rightEyeCenter = averageLandmarks([rightOuter, rightInner]);
+  const leftEyeWidth = distance2d(leftOuter, leftInner);
+  const rightEyeWidth = distance2d(rightOuter, rightInner);
+  const leftIrisOffset = leftIris && leftEyeCenter && leftEyeWidth > 0.0001
+    ? (leftIris.x - leftEyeCenter.x) / leftEyeWidth
+    : null;
+  const rightIrisOffset = rightIris && rightEyeCenter && rightEyeWidth > 0.0001
+    ? (rightIris.x - rightEyeCenter.x) / rightEyeWidth
+    : null;
+
+  const offsets = [leftIrisOffset, rightIrisOffset].filter((value): value is number => value !== null);
+  const absIrisOffset = offsets.length > 0
+    ? Math.abs(offsets.reduce((sum, value) => sum + value, 0) / offsets.length)
+    : 0;
+
+  // Iris vertical check
+  const leftUpperLid = getLandmark(landmarks, 159);
+  const leftLowerLid = getLandmark(landmarks, 145);
+  const rightUpperLid = getLandmark(landmarks, 386);
+  const rightLowerLid = getLandmark(landmarks, 374);
+
+  let meanVertical = 0.5;
+  if (leftIris && leftUpperLid && leftLowerLid && rightIris && rightUpperLid && rightLowerLid) {
+    const leftEyeHeight = leftLowerLid.y - leftUpperLid.y;
+    const rightEyeHeight = rightLowerLid.y - rightUpperLid.y;
+    if (leftEyeHeight > 0.003 && rightEyeHeight > 0.003) {
+      const leftV = (leftIris.y - leftUpperLid.y) / leftEyeHeight;
+      const rightV = (rightIris.y - rightUpperLid.y) / rightEyeHeight;
+      meanVertical = (leftV + rightV) / 2;
+    }
+  }
+
+  // Compute severity: 0 = on camera, 1 = mild, 2 = severe
+  // Wide "normal" zone: people look at screen, not camera — slight gaze offset is expected
+  let severity = 0;
+  if (absYaw > 0.6 || absIrisOffset > 0.35 || meanVertical > 0.82 || faceRatio < 1.5) {
+    severity = 2;
+  } else if (absYaw > 0.42 || absIrisOffset > 0.25 || meanVertical > 0.75 || faceRatio < 1.8) {
+    severity = 1;
+  }
+
+  const level = severity === 2 ? 'Looking away' : severity === 1 ? 'Glancing away' : 'Looking at camera';
+  return { level, faceRatio };
+};
+
+type PostureResult = { level: string; score: number };
+
+const evaluatePosture = (result: PoseLandmarkerResult): PostureResult | null => {
+  const landmarks = result.landmarks[0];
+  if (!landmarks?.length) return null;
+
+  const nose = getLandmark(landmarks, 0);
+  const leftShoulder = getLandmark(landmarks, 11);
+  const rightShoulder = getLandmark(landmarks, 12);
+  if (!nose || !leftShoulder || !rightShoulder) return null;
+
+  const shoulderWidth = distance2d(leftShoulder, rightShoulder);
+  if (shoulderWidth < 0.0001) return null;
+
+  const shoulderMidY = (leftShoulder.y + rightShoulder.y) / 2;
+  const shoulderMidX = (leftShoulder.x + rightShoulder.x) / 2;
+  const headDrop = (nose.y - shoulderMidY) / shoulderWidth;
+  const shoulderTilt = Math.abs(leftShoulder.y - rightShoulder.y) / shoulderWidth;
+  const lateralOffset = Math.abs(nose.x - shoulderMidX) / shoulderWidth;
+
+  // Aggregated score: max of the three normalized deviations
+  const score = Math.max(headDrop, shoulderTilt, lateralOffset);
+
+  // Default (uncalibrated) thresholds — wide normal zone for typical webcam setups
+  let level: string;
+  if (headDrop > -0.05 || shoulderTilt > 0.35 || lateralOffset > 0.55) {
+    level = 'Slouching';
+  } else if (headDrop > -0.18 || shoulderTilt > 0.25 || lateralOffset > 0.45) {
+    level = 'Watch posture';
+  } else {
+    level = 'Upright';
+  }
+
+  return { level, score };
+};
+
+export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', onIndicatorsUpdate?: (data: IndicatorUpdate) => void }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -23,6 +264,45 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
   const isSocketOpenRef = useRef(false);
   const isSessionReadyRef = useRef(false);
   const indicatorIntervalRef = useRef<number | null>(null);
+  const recentWordTimestampsRef = useRef<number[]>([]);
+  const fillerBreakdownRef = useRef<Record<string, number>>({});
+  const lastTranscriptChunkRef = useRef('');
+  const lastSpeechTimestampRef = useRef(0);
+  const volumeTimeDomainRef = useRef<Uint8Array | null>(null);
+  const smoothedVolumeRef = useRef(0);
+  const lastDerivedSignatureRef = useRef('');
+  const localVisualIntervalRef = useRef<number | null>(null);
+  const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
+  const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
+  const localVisualActiveRef = useRef(false);
+  const eyeStatusRef = useRef<MajorityVoter>(createMajorityVoter());
+  const postureStatusRef = useRef<MajorityVoter>(createMajorityVoter());
+  const eyeCalibrationRef = useRef<CalibrationState>(createCalibrationState());
+  const postureCalibrationRef = useRef<CalibrationState>(createCalibrationState());
+  const missingFaceTicksRef = useRef(0);
+  const missingPoseTicksRef = useRef(0);
+  const lastLocalVisualSignatureRef = useRef('');
+
+  const resetDerivedIndicatorsState = useCallback(() => {
+    recentWordTimestampsRef.current = [];
+    fillerBreakdownRef.current = {};
+    lastTranscriptChunkRef.current = '';
+    lastSpeechTimestampRef.current = 0;
+    volumeTimeDomainRef.current = null;
+    smoothedVolumeRef.current = 0;
+    lastDerivedSignatureRef.current = '';
+  }, []);
+
+  const resetLocalVisualState = useCallback(() => {
+    localVisualActiveRef.current = false;
+    eyeStatusRef.current = createMajorityVoter();
+    postureStatusRef.current = createMajorityVoter();
+    eyeCalibrationRef.current = createCalibrationState();
+    postureCalibrationRef.current = createCalibrationState();
+    missingFaceTicksRef.current = 0;
+    missingPoseTicksRef.current = 0;
+    lastLocalVisualSignatureRef.current = '';
+  }, []);
 
   const setSpeakingState = useCallback((value: boolean) => {
     if (isSpeakingRef.current === value) return;
@@ -81,16 +361,32 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
       clearInterval(indicatorIntervalRef.current);
       indicatorIntervalRef.current = null;
     }
+    if (localVisualIntervalRef.current) {
+      clearInterval(localVisualIntervalRef.current);
+      localVisualIntervalRef.current = null;
+    }
+    if (faceLandmarkerRef.current) {
+      faceLandmarkerRef.current.close();
+      faceLandmarkerRef.current = null;
+    }
+    if (poseLandmarkerRef.current) {
+      poseLandmarkerRef.current.close();
+      poseLandmarkerRef.current = null;
+    }
+    resetDerivedIndicatorsState();
+    resetLocalVisualState();
     setIsConnected(false);
     setIsConnecting(false);
     setSpeakingState(false);
-  }, [clearSpeakingTimers, setSpeakingState]);
+  }, [clearSpeakingTimers, resetDerivedIndicatorsState, resetLocalVisualState, setSpeakingState]);
 
   const connect = useCallback(async (videoElement: HTMLVideoElement) => {
     setIsConnecting(true);
     setError(null);
     clearSpeakingTimers();
     setSpeakingState(false);
+    resetDerivedIndicatorsState();
+    resetLocalVisualState();
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("API Key is missing");
@@ -189,14 +485,246 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
         });
       };
 
+      const ingestInputTranscript = (rawText: string) => {
+        const normalized = rawText.trim().toLowerCase();
+        if (!normalized) return;
+
+        const now = Date.now();
+        let delta = normalized;
+        const previousChunk = lastTranscriptChunkRef.current;
+
+        if (previousChunk) {
+          if (normalized === previousChunk) {
+            lastSpeechTimestampRef.current = now;
+            return;
+          }
+          if (normalized.startsWith(previousChunk)) {
+            delta = normalized.slice(previousChunk.length);
+          } else if (previousChunk.startsWith(normalized)) {
+            lastSpeechTimestampRef.current = now;
+            return;
+          }
+        }
+
+        lastTranscriptChunkRef.current = normalized;
+        lastSpeechTimestampRef.current = now;
+
+        const words = tokenizeWords(delta);
+        for (let i = 0; i < words.length; i++) {
+          recentWordTimestampsRef.current.push(now);
+        }
+
+        if (words.length === 0) return;
+
+        const breakdown = fillerBreakdownRef.current;
+        for (const word of words) {
+          if (!FILLER_SINGLE_WORDS.has(word)) continue;
+          breakdown[word] = (breakdown[word] ?? 0) + 1;
+        }
+
+        for (const { label, pattern } of FILLER_PHRASE_PATTERNS) {
+          const matches = delta.match(pattern);
+          if (!matches?.length) continue;
+          breakdown[label] = (breakdown[label] ?? 0) + matches.length;
+        }
+      };
+
+      const startLocalVisualAnalysis = async () => {
+        if (!onIndicatorsUpdate) return;
+        if (stream.getVideoTracks().length === 0) return;
+        if (localVisualIntervalRef.current) {
+          clearInterval(localVisualIntervalRef.current);
+          localVisualIntervalRef.current = null;
+        }
+        resetLocalVisualState();
+
+        try {
+          const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_BASE_URL);
+          if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+
+          const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: FACE_LANDMARKER_MODEL_URL },
+            runningMode: 'VIDEO',
+            numFaces: 1,
+            minFaceDetectionConfidence: 0.5,
+            minFacePresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          }).catch((err) => {
+            console.warn('[DebateCoach] FaceLandmarker init failed', err);
+            return null;
+          });
+
+          const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+            baseOptions: { modelAssetPath: POSE_LANDMARKER_MODEL_URL },
+            runningMode: 'VIDEO',
+            numPoses: 1,
+            minPoseDetectionConfidence: 0.5,
+            minPosePresenceConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+          }).catch((err) => {
+            console.warn('[DebateCoach] PoseLandmarker init failed', err);
+            return null;
+          });
+
+          if (!faceLandmarker && !poseLandmarker) {
+            console.warn('[DebateCoach] Local visual analysis disabled: no landmarker initialized');
+            return;
+          }
+
+          if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) {
+            faceLandmarker?.close();
+            poseLandmarker?.close();
+            return;
+          }
+
+          if (faceLandmarker) {
+            faceLandmarkerRef.current = faceLandmarker;
+          }
+          if (poseLandmarker) {
+            poseLandmarkerRef.current = poseLandmarker;
+          }
+          localVisualActiveRef.current = true;
+
+          const analysisCanvas = document.createElement('canvas');
+          const analysisCtx = analysisCanvas.getContext('2d');
+
+          localVisualIntervalRef.current = window.setInterval(() => {
+            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+            if (videoElement.readyState < 2) return;
+            if (!analysisCtx) return;
+
+            const frameWidth = videoElement.videoWidth || 0;
+            const frameHeight = videoElement.videoHeight || 0;
+            if (frameWidth < 16 || frameHeight < 16) return;
+
+            if (analysisCanvas.width !== frameWidth || analysisCanvas.height !== frameHeight) {
+              analysisCanvas.width = frameWidth;
+              analysisCanvas.height = frameHeight;
+            }
+            analysisCtx.drawImage(videoElement, 0, 0, frameWidth, frameHeight);
+
+            const faceModel = faceLandmarkerRef.current;
+            const poseModel = poseLandmarkerRef.current;
+            if (!faceModel && !poseModel) return;
+
+            const timestampMs = performance.now();
+            let eyeResult: EyeContactResult | null = null;
+            let postureResult: PostureResult | null = null;
+
+            if (faceModel) {
+              try {
+                eyeResult = evaluateEyeContact(faceModel.detectForVideo(analysisCanvas, timestampMs));
+              } catch {
+                eyeResult = null;
+              }
+            }
+            if (poseModel) {
+              try {
+                postureResult = evaluatePosture(poseModel.detectForVideo(analysisCanvas, timestampMs));
+              } catch {
+                postureResult = null;
+              }
+            }
+
+            const hasFaceModel = Boolean(faceModel);
+            const hasPoseModel = Boolean(poseModel);
+            if (hasFaceModel) {
+              missingFaceTicksRef.current = eyeResult ? 0 : missingFaceTicksRef.current + 1;
+            }
+            if (hasPoseModel) {
+              missingPoseTicksRef.current = postureResult ? 0 : missingPoseTicksRef.current + 1;
+            }
+
+            // --- Calibration phase ---
+            const eyeCal = eyeCalibrationRef.current;
+            const postureCal = postureCalibrationRef.current;
+
+            if (!eyeCal.done || !postureCal.done) {
+              if (eyeResult && !eyeCal.done) {
+                eyeCal.samples.push(eyeResult.faceRatio);
+                if (eyeCal.samples.length >= CALIBRATION_READINGS) finalizeCalibration(eyeCal);
+              }
+              if (postureResult && !postureCal.done) {
+                postureCal.samples.push(postureResult.score);
+                if (postureCal.samples.length >= CALIBRATION_READINGS) finalizeCalibration(postureCal);
+              }
+              // Show calibrating status during calibration
+              const calSig = 'Calibrating...|Calibrating...';
+              if (calSig !== lastLocalVisualSignatureRef.current) {
+                lastLocalVisualSignatureRef.current = calSig;
+                onIndicatorsUpdate({ eyeContact: 'Calibrating...', posture: 'Calibrating...' });
+              }
+              return;
+            }
+
+            // --- Post-calibration: apply calibrated thresholds ---
+            let eyeLevel: string;
+            if (!eyeResult) {
+              eyeLevel = missingFaceTicksRef.current > LOCAL_VISUAL_LOSS_TICKS ? 'Face not visible' : eyeStatusRef.current.current;
+            } else {
+              // Combine calibrated faceRatio deviation with the raw severity level
+              const faceRatioDev = Math.abs(eyeResult.faceRatio - eyeCal.baseline) / eyeCal.mad;
+              if (eyeResult.level === 'Looking away' || faceRatioDev > 5) {
+                eyeLevel = 'Looking away';
+              } else if (eyeResult.level === 'Glancing away' || faceRatioDev > 3) {
+                eyeLevel = 'Glancing away';
+              } else {
+                eyeLevel = 'Looking at camera';
+              }
+            }
+
+            let postureLevel: string;
+            if (!postureResult) {
+              postureLevel = missingPoseTicksRef.current > LOCAL_VISUAL_LOSS_TICKS ? 'Posture not visible' : postureStatusRef.current.current;
+            } else {
+              const scoreDev = Math.abs(postureResult.score - postureCal.baseline) / postureCal.mad;
+              if (scoreDev > 5) {
+                postureLevel = 'Slouching';
+              } else if (scoreDev > 3) {
+                postureLevel = 'Watch posture';
+              } else {
+                postureLevel = 'Upright';
+              }
+            }
+
+            // --- Majority voting ---
+            const eyeChanged = hasFaceModel && advanceMajorityVote(eyeStatusRef.current, eyeLevel);
+            const postureChanged = hasPoseModel && advanceMajorityVote(postureStatusRef.current, postureLevel);
+            if (!eyeChanged && !postureChanged) return;
+
+            const update: IndicatorUpdate = {};
+            if (eyeChanged) update.eyeContact = eyeStatusRef.current.current;
+            if (postureChanged) update.posture = postureStatusRef.current.current;
+
+            const signature = `${update.eyeContact ?? ''}|${update.posture ?? ''}`;
+            if (signature === lastLocalVisualSignatureRef.current) return;
+            lastLocalVisualSignatureRef.current = signature;
+            console.log('[DebateCoach] Local visual update', update);
+            onIndicatorsUpdate(update);
+          }, LOCAL_VISUAL_TICK_MS);
+        } catch (err) {
+          console.warn('[DebateCoach] Local visual analysis unavailable', err);
+        }
+      };
+
       sessionPromise = ai.live.connect({
         model: "gemini-2.5-flash-native-audio-latest",
         config: {
           responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          realtimeInputConfig: {
+            activityHandling: mode === 'presentation'
+              ? ActivityHandling.NO_INTERRUPTION
+              : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+            automaticActivityDetection: {
+              disabled: false,
+              silenceDurationMs: mode === 'presentation' ? 500 : 200,
+              prefixPaddingMs: 20,
+            },
+          },
           proactivity: { proactiveAudio: true },
-          // thinkingConfig: {
-          //   thinkingBudget: 0,
-          // },
           enableAffectiveDialog: true,
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
@@ -205,7 +733,8 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
           tools: [{
             functionDeclarations: [{
               name: "updateIndicators",
-              description: "Update the visual indicators on the user's screen based on their current performance.",
+              description: "Update the visual indicators on the user's screen based on their current performance. Call this tool frequently, even during the user's speech, to keep the UI updated in real-time.",
+              behavior: Behavior.NON_BLOCKING,
               parameters: {
                 type: Type.OBJECT,
                 properties: {
@@ -225,18 +754,25 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
                   volumeLevel: { type: Type.STRING, description: "'Too Quiet', 'Good', 'Too Loud'" },
                   overallScore: { type: Type.INTEGER, description: "1-100 overall performance score" }
                 },
-                required: ["pace", "eyeContact", "posture", "fillerWords", "feedbackMessage", "confidenceScore", "volumeLevel", "overallScore"]
+
               }
             }]
           }]
         },
         callbacks: {
           onopen: () => {
-            console.debug(`[DebateCoach] Session opened at ${new Date().toISOString()} | mode: ${mode}`);
+            if (sessionRef.current !== sessionPromise) return;
+            console.log(`[DebateCoach] Session opened at ${new Date().toISOString()} | mode: ${mode}`);
             isSocketOpenRef.current = true;
             isSessionReadyRef.current = false;
             setIsConnected(true);
             setIsConnecting(false);
+            if (onIndicatorsUpdate) {
+              onIndicatorsUpdate({
+                eyeContact: eyeStatusRef.current.current,
+                posture: postureStatusRef.current.current,
+              });
+            }
 
             workletNode.port.onmessage = (e) => {
               if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
@@ -256,7 +792,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
               });
             };
 
-            // Video frames — 1fps for faster eye contact / posture detection
+            // Send video frames to Live session.
             if (stream.getVideoTracks().length > 0) {
               let frameCount = 0;
               videoIntervalRef.current = window.setInterval(() => {
@@ -268,7 +804,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
                   ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
                   const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
                   frameCount++;
-                  console.debug(`[DebateCoach] Video frame #${frameCount} sent at ${new Date().toISOString()}`);
+                  console.log(`[DebateCoach] Video frame #${frameCount} sent at ${new Date().toISOString()}`);
                   withOpenSession((session) => {
                     try {
                       session.sendRealtimeInput({ media: { data: base64Image, mimeType: 'image/jpeg' } });
@@ -280,48 +816,76 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
               }, 1000); // 1 fps — balance between latency and bandwidth
             }
 
-            // Periodic generateContent for continuous visual indicator updates
-            // Runs independently of Live session turn-taking
-            if (onIndicatorsUpdate && stream.getVideoTracks().length > 0) {
-              let indicatorRequestInFlight = false;
-              indicatorIntervalRef.current = window.setInterval(async () => {
-                if (indicatorRequestInFlight) return;
+            // Derived indicator updates come from live transcription + local audio level.
+            if (onIndicatorsUpdate) {
+              indicatorIntervalRef.current = window.setInterval(() => {
                 if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-                try {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = videoElement.videoWidth || 640;
-                  canvas.height = videoElement.videoHeight || 480;
-                  const ctx = canvas.getContext('2d');
-                  if (!ctx || videoElement.readyState < 2) return;
-                  ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-                  const base64Image = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
 
-                  indicatorRequestInFlight = true;
-                  const response = await ai.models.generateContent({
-                    model: "gemini-2.5-flash",
-                    contents: [{
-                      role: "user",
-                      parts: [
-                        { inlineData: { data: base64Image, mimeType: "image/jpeg" } },
-                        { text: "You are a speech coach analyzing a speaker. Based on this video frame, provide a JSON object with these exact fields: pace (string: 'Good', 'Too Fast', 'Too Slow'), eyeContact (string: 'Looking at camera', 'Looking away'), posture (string: 'Good', 'Slouching'), confidenceScore (number 1-100), volumeLevel (string: 'Good'), overallScore (number 1-100). Do NOT include feedbackMessage or fillerWords. Respond ONLY with the JSON object, no markdown." }
-                      ]
-                    }],
-                    config: {
-                      responseMimeType: "application/json",
-                    }
-                  });
-                  const text = response.text?.trim();
-                  if (text) {
-                    const data = JSON.parse(text);
-                    onIndicatorsUpdate(data);
-                  }
-                } catch (err) {
-                  console.warn("[DebateCoach] Indicator generateContent error:", err);
-                } finally {
-                  indicatorRequestInFlight = false;
+                const now = Date.now();
+                const cutoff = now - TRANSCRIPT_PACE_WINDOW_MS;
+                recentWordTimestampsRef.current = recentWordTimestampsRef.current.filter(ts => ts >= cutoff);
+
+                const breakdownEntries = Object.entries(fillerBreakdownRef.current)
+                  .filter(([, count]) => count > 0)
+                  .sort(([a], [b]) => a.localeCompare(b));
+                const fillerBreakdown = Object.fromEntries(breakdownEntries);
+                const fillerTotal = breakdownEntries.reduce((sum, [, count]) => sum + count, 0);
+
+                const hasRecentSpeech = now - lastSpeechTimestampRef.current <= RECENT_SPEECH_MS;
+                let pace: string | undefined;
+                if (hasRecentSpeech && recentWordTimestampsRef.current.length > 0) {
+                  const oldestWordTimestamp = recentWordTimestampsRef.current[0] ?? now;
+                  const sampleMs = Math.max(
+                    MIN_PACE_SAMPLE_MS,
+                    Math.min(TRANSCRIPT_PACE_WINDOW_MS, now - oldestWordTimestamp),
+                  );
+                  const wordsPerMinute = (recentWordTimestampsRef.current.length * 60000) / sampleMs;
+                  if (wordsPerMinute > 170) pace = 'Too Fast';
+                  else if (wordsPerMinute < 105) pace = 'Too Slow';
+                  else pace = 'Good';
                 }
-              }, 3000);
+
+                let volumeLevel: string | undefined;
+                if (hasRecentSpeech && analyserRef.current) {
+                  const analyser = analyserRef.current;
+                  const neededLength = analyser.fftSize;
+                  if (!volumeTimeDomainRef.current || volumeTimeDomainRef.current.length !== neededLength) {
+                    volumeTimeDomainRef.current = new Uint8Array(neededLength);
+                  }
+
+                  const volumeData = volumeTimeDomainRef.current;
+                  analyser.getByteTimeDomainData(volumeData);
+                  let sumSquares = 0;
+                  for (let i = 0; i < volumeData.length; i++) {
+                    const centered = (volumeData[i] - 128) / 128;
+                    sumSquares += centered * centered;
+                  }
+                  const rms = Math.sqrt(sumSquares / volumeData.length);
+                  smoothedVolumeRef.current = (smoothedVolumeRef.current * 0.82) + (rms * 0.18);
+
+                  if (smoothedVolumeRef.current < 0.015) volumeLevel = 'Too Quiet';
+                  else if (smoothedVolumeRef.current > 0.11) volumeLevel = 'Too Loud';
+                  else volumeLevel = 'Good';
+                }
+
+                const update: IndicatorUpdate = {
+                  fillerWords: {
+                    total: fillerTotal,
+                    breakdown: fillerBreakdown,
+                  },
+                };
+                if (pace) update.pace = pace;
+                if (volumeLevel) update.volumeLevel = volumeLevel;
+
+                const signature = `${update.pace ?? ''}|${update.volumeLevel ?? ''}|${fillerTotal}|${JSON.stringify(fillerBreakdown)}`;
+                if (signature === lastDerivedSignatureRef.current) return;
+                lastDerivedSignatureRef.current = signature;
+                onIndicatorsUpdate(update);
+              }, DERIVED_INDICATOR_TICK_MS);
             }
+
+            void startLocalVisualAnalysis();
+
           },
           onmessage: async (message: LiveServerMessage) => {
             if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) {
@@ -330,7 +894,17 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
 
             if (message.setupComplete) {
               isSessionReadyRef.current = true;
-              console.debug(`[DebateCoach] Session setup complete at ${new Date().toISOString()}`);
+              console.log(`[DebateCoach] Session setup complete at ${new Date().toISOString()}`);
+            }
+
+            // Log audio transcriptions (input & output)
+            const sc = message.serverContent as any;
+            if (sc?.inputTranscription?.text) {
+              console.log(`[DebateCoach] User said: "${sc.inputTranscription.text}"`);
+              ingestInputTranscript(sc.inputTranscription.text);
+            }
+            if (sc?.outputTranscription?.text) {
+              console.debug(`[DebateCoach] Model said: "${sc.outputTranscription.text}"`);
             }
 
             if (message.serverContent?.modelTurn) {
@@ -409,13 +983,22 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             if (message.toolCall) {
               const call = message.toolCall.functionCalls.find(fc => fc.name === 'updateIndicators');
               if (call && onIndicatorsUpdate) {
-                console.debug(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
+                console.log(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
                   pace: call.args?.pace,
                   eyeContact: call.args?.eyeContact,
                   overallScore: call.args?.overallScore,
                   latencyNote: 'Check gap between video frame sends and this timestamp'
                 });
-                onIndicatorsUpdate(call.args as unknown as IndicatorData);
+                if (call.args && typeof call.args === 'object') {
+                  const update = { ...(call.args as IndicatorUpdate) };
+                  if (localVisualActiveRef.current) {
+                    delete update.eyeContact;
+                    delete update.posture;
+                  }
+                  if (Object.keys(update).length > 0) {
+                    onIndicatorsUpdate(update);
+                  }
+                }
                 // Send tool response
                 withOpenSession((session) => {
                   try {
@@ -423,7 +1006,8 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
                       functionResponses: [{
                         id: call.id,
                         name: call.name,
-                        response: { result: "ok" }
+                        response: { result: "ok" },
+                        scheduling: FunctionResponseScheduling.SILENT,
                       }]
                     });
                   } catch (err) {
@@ -434,6 +1018,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             }
           },
           onclose: (event: CloseEvent) => {
+            if (sessionRef.current !== sessionPromise) return;
             const wasReady = isSessionReadyRef.current;
             console.debug(`[DebateCoach] Session closed natively at ${new Date().toISOString()}`, {
               code: event.code,
@@ -450,6 +1035,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
             disconnect({ skipSessionClose: true });
           },
           onerror: (err: any) => {
+            if (sessionRef.current !== sessionPromise) return;
             console.error("Live API Error:", err);
             setError(err.message || "An error occurred");
             isSocketOpenRef.current = false;
@@ -464,9 +1050,9 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
     } catch (err: any) {
       console.error(err);
       setError(err.message);
-      setIsConnecting(false);
+      disconnect({ skipSessionClose: true });
     }
-  }, [mode, onIndicatorsUpdate, disconnect, clearSpeakingTimers, setSpeakingState]);
+  }, [mode, onIndicatorsUpdate, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
 
   return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }

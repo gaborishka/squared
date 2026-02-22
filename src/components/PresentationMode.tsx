@@ -1,46 +1,68 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { ArrowLeft, Activity } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { Indicators } from './Indicators';
 import { CameraOverlay } from './CameraOverlay';
-import { IndicatorData } from '../types';
+import { IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
 
 export function PresentationMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
+  const liveSessionActiveRef = useRef(false);
+
+  const stopPreview = useCallback(() => {
+    const previewStream = previewStreamRef.current;
+    if (previewStream) {
+      previewStream.getTracks().forEach(track => track.stop());
+      previewStreamRef.current = null;
+    }
+    if (videoRef.current && videoRef.current.srcObject === previewStream) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startPreview = useCallback(async () => {
+    if (previewStreamRef.current || liveSessionActiveRef.current) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      if (liveSessionActiveRef.current) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      previewStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.warn("Could not get preview stream", err);
+    }
+  }, []);
+
+  const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
+    setIndicators(prev => mergeIndicatorData(prev, update));
+  }, []);
 
   const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
     mode: 'presentation',
-    onIndicatorsUpdate: setIndicators
+    onIndicatorsUpdate: handleIndicatorsUpdate
   });
 
   useEffect(() => {
-    async function startPreview() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        previewStreamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.warn("Could not get preview stream", err);
-      }
-    }
-    startPreview();
-
-    return () => {
-      if (previewStreamRef.current) {
-        previewStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
+    return () => stopPreview();
+  }, [stopPreview]);
 
   useEffect(() => {
-    if (!isConnected && videoRef.current && previewStreamRef.current) {
-      videoRef.current.srcObject = previewStreamRef.current;
+    liveSessionActiveRef.current = isConnected || isConnecting;
+  }, [isConnected, isConnecting]);
+
+  useEffect(() => {
+    if (isConnected || isConnecting) {
+      stopPreview();
+      return;
     }
-  }, [isConnected]);
+    startPreview();
+  }, [isConnected, isConnecting, startPreview, stopPreview]);
 
   useEffect(() => {
     return () => disconnect();
@@ -50,6 +72,7 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
     if (isConnected || isConnecting) {
       disconnect();
     } else if (videoRef.current) {
+      stopPreview();
       connect(videoRef.current);
     }
   };
