@@ -243,7 +243,7 @@ const evaluatePosture = (result: PoseLandmarkerResult): PostureResult | null => 
   return { level, score };
 };
 
-export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', onIndicatorsUpdate?: (data: IndicatorUpdate) => void }) {
+export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', contextText?: string, onIndicatorsUpdate?: (data: IndicatorUpdate) => void }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -390,7 +390,7 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("API Key is missing");
-      const ai = new GoogleGenAI({ apiKey, httpOptions: {"apiVersion": "v1alpha"} });
+      const ai = new GoogleGenAI({ apiKey, httpOptions: { "apiVersion": "v1alpha" } });
 
       let stream: MediaStream;
       try {
@@ -462,9 +462,13 @@ export function useLiveAPI({ mode, onIndicatorsUpdate }: { mode: 'rehearsal' | '
       playbackAnalyser.connect(playbackContext.destination);
       playbackAnalyserRef.current = playbackAnalyser;
 
-      const systemInstruction = mode === 'rehearsal'
+      const baseInstruction = mode === 'rehearsal'
         ? "You are DebateCoach, an AI speech coaching agent. The user is practicing a speech. You will receive audio and video of the user. Analyze their delivery: tone, pace, filler words, volume, confidence, eye contact, posture. Interrupt the user with short, constructive voice feedback if they are speaking too fast, using too many filler words, looking away, or slouching. Keep feedback brief (1-2 sentences). If the user interrupts you, stop and listen. Also use the updateIndicators tool to update the UI."
         : "You are DebateCoach, a silent real-time coach. The user is giving a live presentation. You will receive audio and video. DO NOT SPEAK. Instead, use the updateIndicators tool frequently to provide real-time visual feedback on their pace, eye contact, posture, and filler words.";
+
+      const systemInstruction = contextText
+        ? `${baseInstruction}\n\nHere is the user's speech plan or context for evaluation:\n${contextText}\n\nPlease evaluate how well the user covers these points during their speech.`
+        : baseInstruction;
 
       const isSessionTransportOpen = (session: any) => {
         const readyState = session?.conn?.ws?.readyState;

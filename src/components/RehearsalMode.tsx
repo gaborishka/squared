@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Activity } from 'lucide-react';
+import { ArrowLeft, Activity, Upload, Type, FileText } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { SessionInsights } from './SessionInsights';
 import { CameraOverlay } from './CameraOverlay';
 import { AnalyzingPulse } from './AnalyzingPulse';
 import { FeedbackItem } from './FeedbackTimeline';
+import { ContextModal } from './ContextModal';
 import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
 
 const AGENT_BIN_INDICES = [1, 2, 4, 6];
@@ -186,6 +187,8 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [contextText, setContextText] = useState<string>('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const sessionStartTimeRef = useRef<number | null>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
@@ -248,6 +251,7 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
 
   const { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking } = useLiveAPI({
     mode: 'rehearsal',
+    contextText,
     onIndicatorsUpdate: handleIndicatorsUpdate
   });
 
@@ -284,6 +288,21 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     return () => disconnect();
   }, [disconnect]);
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text === 'string') {
+        setContextText(prev => prev ? prev + '\n\n' + text : text);
+        setIsModalOpen(true);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, []);
 
   useEffect(() => {
     const insightsPanel = insightsPanelRef.current;
@@ -421,7 +440,7 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
               Session Insights
             </h3>
             {isConnected ? (
-                <SessionInsights
+              <SessionInsights
                 data={indicators ?? DEFAULT_INDICATORS}
                 feedbackHistory={feedbackHistory}
                 analyserRef={analyserRef}
@@ -436,14 +455,63 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
                   <Activity className="w-8 h-8 text-zinc-500" />
                 </div>
                 <h4 className="text-zinc-300 font-medium mb-2">Ready to Start</h4>
-                <p className="text-zinc-500 text-sm max-w-[250px]">
+                <p className="text-zinc-500 text-sm max-w-[250px] mb-6">
                   Click <strong>Start Rehearsal</strong> when you're ready. The AI coach will analyze your performance in real-time.
                 </p>
+                <div className="w-full text-left space-y-3">
+                  <span className="block text-sm font-medium text-zinc-300">
+                    Speech Plan (Optional)
+                  </span>
+                  <div className="flex gap-3 mt-2">
+                    <button
+                      onClick={() => setIsModalOpen(true)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50"
+                    >
+                      <Type className="w-4 h-4 text-indigo-400" />
+                      Add Text
+                    </button>
+                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50">
+                      <Upload className="w-4 h-4 text-emerald-400" />
+                      Upload File
+                      <input
+                        type="file"
+                        accept=".txt,.md,.csv,.json"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
+                    </label>
+                  </div>
+                  {contextText && (
+                    <div className="mt-4 p-3 bg-zinc-950/50 border border-zinc-800 rounded-xl flex items-start gap-3 relative group">
+                      <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4 text-indigo-400" />
+                      </div>
+                      <div className="flex-1 min-w-0 pr-12">
+                        <p className="text-sm text-zinc-300 font-medium truncate">Speech plan attached</p>
+                        <p className="text-xs text-zinc-500 truncate">{contextText.length} characters</p>
+                      </div>
+                      <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-indigo-400 hover:text-indigo-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
       </main>
+
+      <ContextModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        contextText={contextText}
+        setContextText={setContextText}
+        title="Speech Plan"
+      />
     </div>
   );
 }

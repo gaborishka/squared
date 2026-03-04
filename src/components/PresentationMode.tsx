@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Activity } from 'lucide-react';
+import { ArrowLeft, Activity, Upload, Type, FileText } from 'lucide-react';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import { Indicators } from './Indicators';
 import { CameraOverlay } from './CameraOverlay';
 import { IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
+import { ContextModal } from './ContextModal';
 
 export function PresentationMode({ onBack }: { onBack: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const [contextText, setContextText] = useState<string>('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
 
@@ -45,6 +48,7 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
 
   const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
     mode: 'presentation',
+    contextText,
     onIndicatorsUpdate: handleIndicatorsUpdate
   });
 
@@ -67,6 +71,21 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     return () => disconnect();
   }, [disconnect]);
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result;
+      if (typeof text === 'string') {
+        setContextText(prev => prev ? prev + '\n\n' + text : text);
+        setIsModalOpen(true);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  }, []);
 
   const handleToggleConnect = () => {
     if (isConnected || isConnecting) {
@@ -93,14 +112,14 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
 
       <main className="flex-1 flex p-6 gap-6 min-h-0">
         <div className="flex-1 relative bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800 flex flex-col">
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            muted 
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
             className="w-full h-full object-cover"
           />
-          
+
           {/* HUD Overlay for Camera */}
           {indicators && <CameraOverlay data={indicators} />}
 
@@ -117,13 +136,12 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
 
           {/* Overlay Controls */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
-            <button 
+            <button
               onClick={handleToggleConnect}
-              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
-                isConnected || isConnecting 
-                  ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20' 
-                  : 'bg-emerald-500 text-white hover:bg-emerald-600'
-              }`}
+              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${isConnected || isConnecting
+                ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
+                : 'bg-emerald-500 text-white hover:bg-emerald-600'
+                }`}
             >
               {isConnected || isConnecting ? 'End Session' : 'Start Presentation'}
             </button>
@@ -145,13 +163,64 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
             {indicators ? (
               <Indicators data={indicators} />
             ) : (
-              <div className="text-zinc-500 text-sm text-center mt-10">
-                Start the session to see real-time metrics here.
+              <div className="flex flex-col flex-1">
+                <div className="flex-1 text-zinc-500 text-sm text-center mt-10">
+                  Start the session to see real-time metrics here.
+                </div>
+                <div className="w-full text-left space-y-3 mt-auto pt-6">
+                  <span className="block text-sm font-medium text-zinc-300">
+                    Speech Plan (Optional)
+                  </span>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setIsModalOpen(true)}
+                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50"
+                    >
+                      <Type className="w-4 h-4 text-indigo-400" />
+                      Add Text
+                    </button>
+                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50">
+                      <Upload className="w-4 h-4 text-emerald-400" />
+                      Upload File
+                      <input
+                        type="file"
+                        accept=".txt,.md,.csv,.json"
+                        className="hidden"
+                        onChange={handleFileUpload}
+                      />
+                    </label>
+                  </div>
+                  {contextText && (
+                    <div className="mt-4 p-3 bg-zinc-950/50 border border-zinc-800 rounded-xl flex items-start gap-3 relative group">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
+                        <FileText className="w-4 h-4 text-emerald-400" />
+                      </div>
+                      <div className="flex-1 min-w-0 pr-12">
+                        <p className="text-sm text-zinc-300 font-medium truncate">Plan attached</p>
+                        <p className="text-xs text-zinc-500 truncate">{contextText.length} characters</p>
+                      </div>
+                      <button
+                        onClick={() => setIsModalOpen(true)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-emerald-400 hover:text-emerald-300 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
         </div>
       </main>
+
+      <ContextModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        contextText={contextText}
+        setContextText={setContextText}
+        title="Presentation Plan"
+      />
     </div>
   );
 }
