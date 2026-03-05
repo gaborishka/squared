@@ -6,9 +6,12 @@ import { CameraOverlay } from './CameraOverlay';
 import { IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
 import { ContextModal } from './ContextModal';
 
-export function PresentationMode({ onBack }: { onBack: () => void }) {
+export function PresentationMode({ onBack, onSessionEnd }: { onBack: () => void, onSessionEnd: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const [feedbackHistory, setFeedbackHistory] = useState<{ id: string, timestamp: string, message: string }[]>([]);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const sessionStartTimeRef = useRef<number | null>(null);
   const [contextText, setContextText] = useState<string>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const previewStreamRef = useRef<MediaStream | null>(null);
@@ -44,6 +47,26 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
 
   const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
     setIndicators(prev => mergeIndicatorData(prev, update));
+
+    if (update.feedbackMessage?.trim()) {
+      setFeedbackHistory(prev => {
+        let timeStr = "00:00";
+        if (sessionStartTimeRef.current) {
+          const diffMs = Date.now() - sessionStartTimeRef.current;
+          const mins = Math.floor(diffMs / 60000);
+          const secs = Math.floor((diffMs % 60000) / 1000);
+          timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        const newItem = {
+          id: Math.random().toString(36).substring(7),
+          timestamp: timeStr,
+          message: update.feedbackMessage
+        };
+
+        return [newItem, ...prev];
+      });
+    }
   }, []);
 
   const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
@@ -58,6 +81,21 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     liveSessionActiveRef.current = isConnected || isConnecting;
+    if (isConnected) {
+      const now = Date.now();
+      setSessionStartTime(now);
+      sessionStartTimeRef.current = now;
+      setFeedbackHistory([{
+        id: 'start',
+        timestamp: '00:00',
+        message: 'Presentation started'
+      }]);
+    } else {
+      setSessionStartTime(null);
+      sessionStartTimeRef.current = null;
+      setIndicators(null);
+      setFeedbackHistory([]);
+    }
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
@@ -87,9 +125,29 @@ export function PresentationMode({ onBack }: { onBack: () => void }) {
     e.target.value = '';
   }, []);
 
-  const handleToggleConnect = () => {
+  const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();
+      if (sessionStartTimeRef.current) {
+        const duration = Date.now() - sessionStartTimeRef.current;
+        try {
+          await fetch('/api/runs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              run: {
+                id: crypto.randomUUID(),
+                mode: 'presentation',
+                duration
+              },
+              feedbacks: feedbackHistory
+            })
+          });
+        } catch (e) {
+          console.error('Failed to save session:', e);
+        }
+        onSessionEnd();
+      }
     } else if (videoRef.current) {
       stopPreview();
       connect(videoRef.current);

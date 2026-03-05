@@ -181,7 +181,7 @@ const AgentWaveform = ({ analyser, isSpeaking }: { analyser: AnalyserNode | null
   );
 };
 
-export function RehearsalMode({ onBack }: { onBack: () => void }) {
+export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, onSessionEnd: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const insightsPanelRef = useRef<HTMLDivElement>(null);
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
@@ -373,9 +373,29 @@ export function RehearsalMode({ onBack }: { onBack: () => void }) {
     };
   }, [isConnected, isSpeaking, analyserRef, playbackAnalyserRef]);
 
-  const handleToggleConnect = () => {
+  const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();
+      if (sessionStartTimeRef.current) {
+        const duration = Date.now() - sessionStartTimeRef.current;
+        try {
+          await fetch('/api/runs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              run: {
+                id: crypto.randomUUID(),
+                mode: 'rehearsal',
+                duration
+              },
+              feedbacks: feedbackHistory
+            })
+          });
+        } catch (e) {
+          console.error('Failed to save session:', e);
+        }
+        onSessionEnd();
+      }
     } else if (videoRef.current) {
       stopPreview();
       connect(videoRef.current);
