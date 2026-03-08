@@ -6,6 +6,10 @@ const router = Router();
 router.post('/api/runs', (req, res) => {
   try {
     const { run, feedbacks } = req.body;
+    if (!run?.id || !run?.mode || !Array.isArray(feedbacks)) {
+      res.status(400).json({ error: 'Missing run (id, mode) or feedbacks array' });
+      return;
+    }
     saveRun(run, feedbacks);
     res.json({ success: true });
   } catch (err) {

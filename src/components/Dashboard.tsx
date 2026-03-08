@@ -1,18 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Database, Clock, Calendar, Activity, MessageSquare } from 'lucide-react';
-interface RunData {
-  id: string;
-  project_id?: string | null;
-  mode: 'rehearsal' | 'presentation';
-  duration: number;
-}
-
-interface FeedbackData {
-  id: string;
-  run_id: string;
-  timestamp: string;
-  message: string;
-}
+import { RunData, FeedbackData } from '../types/api';
 
 type RunWithFeedbacks = RunData & { created_at: string; feedbacks: FeedbackData[] };
 
