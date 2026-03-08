@@ -1,26 +1,57 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Activity, Upload, Type, FileText } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, Clock3, Presentation, Sparkles } from 'lucide-react';
+import { api } from '../api/client';
 import { useLiveAPI } from '../hooks/useLiveAPI';
-import { Indicators } from './Indicators';
+import {
+  buildPresentationContext,
+  createSessionMetricsTracker,
+  feedbackCategoryFromMessage,
+  feedbackSeverityFromAgentMode,
+  formatTimestampFromStart,
+  ingestIndicatorSample,
+  mergeSlideAnalysis,
+  summarizeSessionMetrics,
+} from '../lib/session';
 import { CameraOverlay } from './CameraOverlay';
-import { IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
-import { ContextModal } from './ContextModal';
+import { Indicators } from './Indicators';
+import { AnalyzingPulse } from './AnalyzingPulse';
+import { DEFAULT_INDICATORS, GamePlan, IndicatorData, IndicatorUpdate, ProjectDetails, indicatorToOverlayState, mergeIndicatorData } from '../types';
 
-export function PresentationMode({ onBack, onSessionEnd }: { onBack: () => void, onSessionEnd: () => void }) {
+interface PresentationModeProps {
+  project: ProjectDetails;
+  gamePlan: GamePlan;
+  onBack: () => void;
+  onSessionEnd: () => void;
+}
+
+export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: PresentationModeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
-  const [feedbackHistory, setFeedbackHistory] = useState<{ id: string, timestamp: string, message: string }[]>([]);
-  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
-  const sessionStartTimeRef = useRef<number | null>(null);
-  const [contextText, setContextText] = useState<string>('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
+  const metricsTrackerRef = useRef(createSessionMetricsTracker());
+  const feedbackPayloadRef = useRef<Array<{
+    id: string;
+    timestamp: string;
+    message: string;
+    slideNumber: number | null;
+    severity: 'info' | 'warning' | 'critical';
+    category: ReturnType<typeof feedbackCategoryFromMessage>;
+  }>>([]);
+  const slideAnalysisMapRef = useRef(
+    new Map<number, { slideNumber: number; issues: string[]; bestPhrase: string; riskLevel: 'safe' | 'watch' | 'fragile' }>(),
+  );
+  const lastFeedbackMessageRef = useRef('');
+  const sessionStartTimeRef = useRef<number | null>(null);
+
+  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+
+  const contextText = useMemo(() => buildPresentationContext(project, gamePlan), [project, gamePlan]);
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
     if (previewStream) {
-      previewStream.getTracks().forEach(track => track.stop());
+      previewStream.getTracks().forEach((track) => track.stop());
       previewStreamRef.current = null;
     }
     if (videoRef.current && videoRef.current.srcObject === previewStream) {
@@ -33,175 +64,166 @@ export function PresentationMode({ onBack, onSessionEnd }: { onBack: () => void,
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (liveSessionActiveRef.current) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
       previewStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-    } catch (err) {
-      console.warn("Could not get preview stream", err);
+    } catch (error) {
+      console.warn('Could not get preview stream', error);
     }
   }, []);
 
   const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
-    setIndicators(prev => mergeIndicatorData(prev, update));
+    setIndicators((previous) => {
+      const next = mergeIndicatorData(previous, update);
+      ingestIndicatorSample(metricsTrackerRef.current, next);
 
-    if (update.feedbackMessage?.trim()) {
-      setFeedbackHistory(prev => {
-        let timeStr = "00:00";
-        if (sessionStartTimeRef.current) {
-          const diffMs = Date.now() - sessionStartTimeRef.current;
-          const mins = Math.floor(diffMs / 60000);
-          const secs = Math.floor((diffMs % 60000) / 1000);
-          timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
-        }
+      const feedbackMessage = update.feedbackMessage?.trim();
+      if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
+        lastFeedbackMessageRef.current = feedbackMessage;
+        feedbackPayloadRef.current.unshift({
+          id: crypto.randomUUID(),
+          timestamp: formatTimestampFromStart(sessionStartTimeRef.current),
+          message: feedbackMessage,
+          slideNumber: next.currentSlide,
+          severity: feedbackSeverityFromAgentMode(next.agentMode),
+          category: feedbackCategoryFromMessage(feedbackMessage),
+        });
+      }
 
-        const newItem = {
-          id: Math.random().toString(36).substring(7),
-          timestamp: timeStr,
-          message: update.feedbackMessage
-        };
-
-        return [newItem, ...prev];
-      });
-    }
+      return next;
+    });
   }, []);
 
   const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
     mode: 'presentation',
     contextText,
-    onIndicatorsUpdate: handleIndicatorsUpdate
+    onIndicatorsUpdate: handleIndicatorsUpdate,
+    onSlideAnalysis: (payload) => {
+      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
+    },
   });
+
+  useEffect(() => {
+    liveSessionActiveRef.current = isConnected || isConnecting;
+  }, [isConnected, isConnecting]);
 
   useEffect(() => {
     return () => stopPreview();
   }, [stopPreview]);
 
   useEffect(() => {
-    liveSessionActiveRef.current = isConnected || isConnecting;
-    if (isConnected) {
-      const now = Date.now();
-      setSessionStartTime(now);
-      sessionStartTimeRef.current = now;
-      setFeedbackHistory([{
-        id: 'start',
-        timestamp: '00:00',
-        message: 'Presentation started'
-      }]);
-    } else {
-      setSessionStartTime(null);
-      sessionStartTimeRef.current = null;
-      setIndicators(null);
-      setFeedbackHistory([]);
-    }
-  }, [isConnected, isConnecting]);
-
-  useEffect(() => {
     if (isConnected || isConnecting) {
       stopPreview();
       return;
     }
-    startPreview();
+    void startPreview();
   }, [isConnected, isConnecting, startPreview, stopPreview]);
 
   useEffect(() => {
     return () => disconnect();
   }, [disconnect]);
 
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result;
-      if (typeof text === 'string') {
-        setContextText(prev => prev ? prev + '\n\n' + text : text);
-        setIsModalOpen(true);
-      }
+  useEffect(() => {
+    if (isConnected) {
+      const now = Date.now();
+      metricsTrackerRef.current = createSessionMetricsTracker();
+      feedbackPayloadRef.current = [];
+      slideAnalysisMapRef.current = new Map();
+      lastFeedbackMessageRef.current = '';
+      setSessionStartTime(now);
+      sessionStartTimeRef.current = now;
+    } else if (!isConnecting) {
+      setSessionStartTime(null);
+      sessionStartTimeRef.current = null;
+    }
+  }, [isConnected, isConnecting]);
+
+  useEffect(() => {
+    const overlayState = indicatorToOverlayState(indicators);
+    if (window.squaredElectron?.updateOverlay) {
+      window.squaredElectron.updateOverlay(overlayState);
+    }
+  }, [indicators]);
+
+  useEffect(() => {
+    return () => {
+      window.squaredElectron?.clearOverlay?.();
     };
-    reader.readAsText(file);
-    e.target.value = '';
   }, []);
 
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();
+      window.squaredElectron?.clearOverlay?.();
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
         try {
-          await fetch('/api/runs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              run: {
-                id: crypto.randomUUID(),
-                mode: 'presentation',
-                duration
-              },
-              feedbacks: feedbackHistory
-            })
+          await api.saveRun({
+            run: {
+              id: crypto.randomUUID(),
+              projectId: project.id,
+              mode: 'presentation',
+              duration,
+              ...summarizeSessionMetrics(metricsTrackerRef.current),
+            },
+            feedbacks: feedbackPayloadRef.current,
+            slideAnalyses: Array.from(slideAnalysisMapRef.current.values()),
           });
-        } catch (e) {
-          console.error('Failed to save session:', e);
+        } catch (saveError) {
+          console.error('Failed to save presentation session:', saveError);
         }
         onSessionEnd();
       }
-    } else if (videoRef.current) {
+      return;
+    }
+
+    if (videoRef.current) {
       stopPreview();
       connect(videoRef.current);
     }
   };
 
+  const currentSegment = indicators?.currentSlide != null
+    ? gamePlan.segments.find((segment) => segment.slideNumber === indicators.currentSlide)
+    : null;
+
   return (
     <div className="h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
         <button onClick={onBack} className="flex items-center text-zinc-400 hover:text-white transition-colors">
           <ArrowLeft className="w-5 h-5 mr-2" /> Back
         </button>
-        <div className="flex items-center space-x-2">
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Presentation</p>
+          <h1 className="text-lg font-semibold text-zinc-100">{project.name}</h1>
+        </div>
+        <div className="flex items-center gap-2">
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
           <span className="text-sm font-medium text-zinc-300">
-            {isConnecting ? 'Connecting...' : isConnected ? 'Silent Coach Active' : 'Ready to Present'}
+            {isConnecting ? 'Connecting...' : isConnected ? 'Silent coach active' : 'Ready'}
           </span>
         </div>
       </header>
 
       <main className="flex-1 flex p-6 gap-6 min-h-0">
-        <div className="flex-1 relative bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800 flex flex-col">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
+        <section className="flex-1 relative rounded-[32px] overflow-hidden border border-zinc-800 bg-zinc-900 flex flex-col">
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          {indicators && <CameraOverlay data={indicators} variant="presentation" />}
 
-          {/* HUD Overlay for Camera */}
-          {indicators && <CameraOverlay data={indicators} />}
-
-          {/* Overlay Indicators - HUD style */}
-          {indicators && (
-            <div className="absolute top-20 right-6 flex flex-col gap-3 z-10">
-              {indicators.feedbackMessage && (
-                <div className="bg-zinc-950/80 backdrop-blur-md border border-zinc-800 text-white px-4 py-3 rounded-xl shadow-lg max-w-xs animate-in fade-in slide-in-from-top-4">
-                  <p className="text-sm font-medium">{indicators.feedbackMessage}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Overlay Controls */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
             <button
               onClick={handleToggleConnect}
-              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${isConnected || isConnecting
-                ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                : 'bg-emerald-500 text-white hover:bg-emerald-600'
-                }`}
+              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
+                isConnected || isConnecting
+                  ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                  : 'bg-emerald-500 text-white hover:bg-emerald-400'
+              }`}
             >
-              {isConnected || isConnecting ? 'End Session' : 'Start Presentation'}
+              {isConnected || isConnecting ? 'End Presentation' : 'Start Presentation'}
             </button>
           </div>
 
@@ -210,75 +232,94 @@ export function PresentationMode({ onBack, onSessionEnd }: { onBack: () => void,
               {error}
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="w-80 flex flex-col gap-6">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 flex-1 overflow-y-auto">
-            <h3 className="text-lg font-semibold mb-4 flex items-center">
-              <Activity className="w-5 h-5 mr-2 text-emerald-400" />
-              Live Metrics
-            </h3>
-            {indicators ? (
-              <Indicators data={indicators} />
-            ) : (
-              <div className="flex flex-col flex-1">
-                <div className="flex-1 text-zinc-500 text-sm text-center mt-10">
-                  Start the session to see real-time metrics here.
-                </div>
-                <div className="w-full text-left space-y-3 mt-auto pt-6">
-                  <span className="block text-sm font-medium text-zinc-300">
-                    Speech Plan (Optional)
-                  </span>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50"
-                    >
-                      <Type className="w-4 h-4 text-indigo-400" />
-                      Add Text
-                    </button>
-                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50">
-                      <Upload className="w-4 h-4 text-emerald-400" />
-                      Upload File
-                      <input
-                        type="file"
-                        accept=".txt,.md,.csv,.json"
-                        className="hidden"
-                        onChange={handleFileUpload}
-                      />
-                    </label>
+        <aside className="w-[380px] shrink-0 flex flex-col gap-6">
+          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Live plan</p>
+                <h2 className="text-2xl font-semibold text-zinc-50 mt-2">Execution guardrails</h2>
+              </div>
+              <span className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-300">
+                {gamePlan.attentionBudget.maxInterventions} max cues
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-5">
+              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Trend</div>
+                <div className="text-2xl font-semibold text-zinc-100 mt-2 capitalize">{gamePlan.overview.trend}</div>
+              </div>
+              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Avg score</div>
+                <div className="text-2xl font-semibold text-zinc-100 mt-2">{Math.round(gamePlan.overview.avgScore)}</div>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4">
+              <div className="flex items-center gap-2 text-zinc-100 font-medium">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                Priority slides
+              </div>
+              <p className="mt-2 text-sm text-zinc-400">
+                {gamePlan.attentionBudget.prioritySlides.length > 0
+                  ? gamePlan.attentionBudget.prioritySlides.join(', ')
+                  : 'No high-risk slides identified.'}
+              </p>
+            </div>
+
+            {currentSegment && (
+              <div className="mt-5 rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.18em] text-emerald-100/70">Current slide</p>
+                    <h3 className="text-lg font-semibold text-emerald-50 mt-1">
+                      {currentSegment.slideNumber}. {currentSegment.slideTitle}
+                    </h3>
                   </div>
-                  {contextText && (
-                    <div className="mt-4 p-3 bg-zinc-950/50 border border-zinc-800 rounded-xl flex items-start gap-3 relative group">
-                      <div className="w-8 h-8 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0">
-                        <FileText className="w-4 h-4 text-emerald-400" />
-                      </div>
-                      <div className="flex-1 min-w-0 pr-12">
-                        <p className="text-sm text-zinc-300 font-medium truncate">Plan attached</p>
-                        <p className="text-xs text-zinc-500 truncate">{contextText.length} characters</p>
-                      </div>
-                      <button
-                        onClick={() => setIsModalOpen(true)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-emerald-400 hover:text-emerald-300 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                  )}
+                  <span className="rounded-full bg-black/15 px-3 py-1 text-xs uppercase tracking-[0.18em] text-emerald-50/80">
+                    {currentSegment.interventionPolicy}
+                  </span>
+                </div>
+                <p className="text-sm text-emerald-50/90 mt-3">
+                  {currentSegment.knownIssues[0] || 'No recurring issue logged for this slide.'}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6 flex-1 min-h-0">
+            <h3 className="text-lg font-semibold mb-4 flex items-center">
+              <Presentation className="w-5 h-5 mr-2 text-emerald-400" />
+              Live HUD state
+            </h3>
+            {isConnected ? (
+              <Indicators data={indicators ?? DEFAULT_INDICATORS} />
+            ) : isConnecting ? (
+              <div className="flex h-full items-center justify-center">
+                <AnalyzingPulse />
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+                  The presentation prompt is preloaded with project structure, risk map, prepared cues, recovery phrases, and per-slide time targets.
+                </div>
+                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-300">
+                  <div className="flex items-center gap-2 font-medium text-zinc-100">
+                    <Clock3 className="w-4 h-4 text-sky-400" />
+                    Target runtime
+                  </div>
+                  <p className="mt-2 text-zinc-400">
+                    Aim for {gamePlan.timingStrategy.totalTargetMinutes} minutes total.
+                    {sessionStartTime ? ` Last presentation started at ${new Date(sessionStartTime).toLocaleTimeString()}.` : ''}
+                  </p>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </aside>
       </main>
-
-      <ContextModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        contextText={contextText}
-        setContextText={setContextText}
-        title="Presentation Plan"
-      />
     </div>
   );
 }

@@ -1,25 +1,9 @@
-export interface FillerWords {
-  total: number;
-  breakdown: Record<string, number>;
-}
-
-export interface IndicatorData {
-  pace: string;
-  eyeContact: string;
-  posture: string;
-  fillerWords: FillerWords;
-  feedbackMessage: string;
-  confidenceScore: number;
-  volumeLevel: string;
-  overallScore: number;
-}
-
-export type IndicatorUpdate = Partial<Omit<IndicatorData, 'fillerWords'>> & {
-  fillerWords?: Partial<FillerWords>;
-};
+export * from '../shared/types';
+import type { IndicatorData, IndicatorUpdate, OverlayState } from '../shared/types';
 
 export const DEFAULT_INDICATORS: IndicatorData = {
   pace: 'Analyzing...',
+  paceWpm: null,
   eyeContact: 'Analyzing...',
   posture: 'Analyzing...',
   fillerWords: { total: 0, breakdown: {} },
@@ -27,6 +11,11 @@ export const DEFAULT_INDICATORS: IndicatorData = {
   confidenceScore: 0,
   volumeLevel: 'Good',
   overallScore: 0,
+  currentSlide: null,
+  microPrompt: '',
+  rescueText: '',
+  agentMode: 'monitor',
+  slideTimeRemaining: null,
 };
 
 export function mergeIndicatorData(previous: IndicatorData | null, update: IndicatorUpdate): IndicatorData {
@@ -40,6 +29,7 @@ export function mergeIndicatorData(previous: IndicatorData | null, update: Indic
 
   return {
     pace: update.pace ?? base.pace,
+    paceWpm: update.paceWpm ?? base.paceWpm,
     eyeContact: update.eyeContact ?? base.eyeContact,
     posture: update.posture ?? base.posture,
     fillerWords: nextFillerWords,
@@ -47,5 +37,21 @@ export function mergeIndicatorData(previous: IndicatorData | null, update: Indic
     confidenceScore: update.confidenceScore ?? base.confidenceScore,
     volumeLevel: update.volumeLevel ?? base.volumeLevel,
     overallScore: update.overallScore ?? base.overallScore,
+    currentSlide: update.currentSlide ?? base.currentSlide,
+    microPrompt: update.microPrompt ?? base.microPrompt,
+    rescueText: update.rescueText ?? base.rescueText,
+    agentMode: update.agentMode ?? base.agentMode,
+    slideTimeRemaining: update.slideTimeRemaining ?? base.slideTimeRemaining,
+  };
+}
+
+export function indicatorToOverlayState(indicators: IndicatorData | null): OverlayState {
+  return {
+    visible: Boolean(indicators?.microPrompt || indicators?.rescueText),
+    mode: indicators?.agentMode ?? 'monitor',
+    microPrompt: indicators?.microPrompt ?? '',
+    rescueText: indicators?.rescueText ?? '',
+    slideTimeRemaining: indicators?.slideTimeRemaining ?? null,
+    currentSlide: indicators?.currentSlide ?? null,
   };
 }

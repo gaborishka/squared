@@ -6,6 +6,17 @@ export function Indicators({ data }: { data: IndicatorData }) {
 
     return (
         <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Current slide</div>
+                    <div className="mt-2 text-2xl font-semibold text-zinc-100">{data.currentSlide ?? '--'}</div>
+                </div>
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3">
+                    <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Agent mode</div>
+                    <div className="mt-2 text-lg font-semibold text-zinc-100 capitalize">{data.agentMode}</div>
+                </div>
+            </div>
+
             <div className="space-y-2">
                 <div className="flex items-center text-sm text-zinc-400">
                     <MessageSquare className="w-4 h-4 mr-2" /> Filler Words
@@ -23,6 +34,18 @@ export function Indicators({ data }: { data: IndicatorData }) {
                     </div>
                     <div className="p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-300 text-sm leading-relaxed">
                         "{data.feedbackMessage}"
+                    </div>
+                </div>
+            )}
+
+            {(data.microPrompt || data.rescueText) && (
+                <div className="space-y-2">
+                    <div className="flex items-center text-sm text-zinc-400">
+                        <AlertCircle className="w-4 h-4 mr-2" /> Live Cue
+                    </div>
+                    <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-100 text-sm leading-relaxed">
+                        <div className="font-semibold">{data.microPrompt || 'Stay steady'}</div>
+                        {data.rescueText && <div className="mt-2 text-emerald-50/90">{data.rescueText}</div>}
                     </div>
                 </div>
             )}

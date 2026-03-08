@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type, ActivityHandling, TurnCoverage, Behavior, FunctionResponseScheduling } from '@google/genai';
 import { FilesetResolver, FaceLandmarker, FaceLandmarkerResult, NormalizedLandmark, PoseLandmarker, PoseLandmarkerResult } from '@mediapipe/tasks-vision';
-import { IndicatorUpdate } from '../types';
+import { IndicatorUpdate, SlideAnalysisToolPayload } from '../types';
 
 const TRANSCRIPT_PACE_WINDOW_MS = 20000;
 const DERIVED_INDICATOR_TICK_MS = 500;
@@ -243,7 +243,17 @@ const evaluatePosture = (result: PoseLandmarkerResult): PostureResult | null => 
   return { level, score };
 };
 
-export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'rehearsal' | 'presentation', contextText?: string, onIndicatorsUpdate?: (data: IndicatorUpdate) => void }) {
+export function useLiveAPI({
+  mode,
+  contextText,
+  onIndicatorsUpdate,
+  onSlideAnalysis,
+}: {
+  mode: 'rehearsal' | 'presentation';
+  contextText?: string;
+  onIndicatorsUpdate?: (data: IndicatorUpdate) => void;
+  onSlideAnalysis?: (payload: SlideAnalysisToolPayload) => void;
+}) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -463,11 +473,11 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
       playbackAnalyserRef.current = playbackAnalyser;
 
       const baseInstruction = mode === 'rehearsal'
-        ? "You are DebateCoach, an AI speech coaching agent. The user is practicing a speech. You will receive audio and video of the user. Analyze their delivery: tone, pace, filler words, volume, confidence, eye contact, posture. Interrupt the user with short, constructive voice feedback if they are speaking too fast, using too many filler words, looking away, or slouching. Keep feedback brief (1-2 sentences). If the user interrupts you, stop and listen. Also use the updateIndicators tool to update the UI."
-        : "You are DebateCoach, a silent real-time coach. The user is giving a live presentation. You will receive audio and video. DO NOT SPEAK. Instead, use the updateIndicators tool frequently to provide real-time visual feedback on their pace, eye contact, posture, and filler words.";
+        ? "You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, slide progress, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases."
+        : "You are DebateCoach, a silent live presentation HUD. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send extremely short contextual cues, slide progress, timing status, and rescue teleprompter text when absolutely necessary. Keep interventions sparse and respect the attention budget in the provided game plan.";
 
       const systemInstruction = contextText
-        ? `${baseInstruction}\n\nHere is the user's speech plan or context for evaluation:\n${contextText}\n\nPlease evaluate how well the user covers these points during their speech.`
+        ? `${baseInstruction}\n\nUse the following project and strategy context while coaching:\n${contextText}`
         : baseInstruction;
 
       const isSessionTransportOpen = (session: any) => {
@@ -721,7 +731,7 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
             activityHandling: mode === 'presentation'
               ? ActivityHandling.NO_INTERRUPTION
               : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
             automaticActivityDetection: {
               disabled: false,
               silenceDurationMs: mode === 'presentation' ? 500 : 200,
@@ -756,9 +766,42 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
                   feedbackMessage: { type: Type.STRING, description: "A short feedback message to display to the user" },
                   confidenceScore: { type: Type.INTEGER, description: "1-100 confidence scale" },
                   volumeLevel: { type: Type.STRING, description: "'Too Quiet', 'Good', 'Too Loud'" },
-                  overallScore: { type: Type.INTEGER, description: "1-100 overall performance score" }
+                  overallScore: { type: Type.INTEGER, description: "1-100 overall performance score" },
+                  currentSlide: { type: Type.INTEGER, description: "The slide number the user appears to be on right now." },
+                  microPrompt: { type: Type.STRING, description: "A concise 1-3 word cue for the HUD." },
+                  rescueText: { type: Type.STRING, description: "Short rescue teleprompter text for when the user is stuck." },
+                  agentMode: {
+                    type: Type.STRING,
+                    description: "How forceful the current intervention should be.",
+                    enum: ['monitor', 'soft_cue', 'directive', 'rescue'],
+                  },
+                  slideTimeRemaining: {
+                    type: Type.INTEGER,
+                    description: "Approximate seconds left before the speaker should transition off the current slide.",
+                  }
                 },
-
+              }
+            }, {
+              name: "saveSlideAnalysis",
+              description: "Persist a slide-level coaching insight discovered during the live session.",
+              behavior: Behavior.NON_BLOCKING,
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  slideNumber: { type: Type.INTEGER, description: "The slide where the issue happened." },
+                  issues: {
+                    type: Type.ARRAY,
+                    description: "Short descriptions of the issues observed on this slide.",
+                    items: { type: Type.STRING },
+                  },
+                  bestPhrase: { type: Type.STRING, description: "A strong phrase the speaker used to recover or land the point." },
+                  riskLevel: {
+                    type: Type.STRING,
+                    description: "Overall risk on this slide.",
+                    enum: ['safe', 'watch', 'fragile'],
+                  },
+                },
+                required: ['slideNumber', 'issues', 'riskLevel'],
               }
             }]
           }]
@@ -878,10 +921,18 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
                     breakdown: fillerBreakdown,
                   },
                 };
-                if (pace) update.pace = pace;
+                if (pace) {
+                  const oldestWordTimestamp = recentWordTimestampsRef.current[0] ?? now;
+                  const sampleMs = Math.max(
+                    MIN_PACE_SAMPLE_MS,
+                    Math.min(TRANSCRIPT_PACE_WINDOW_MS, now - oldestWordTimestamp),
+                  );
+                  update.pace = pace;
+                  update.paceWpm = Number(((recentWordTimestampsRef.current.length * 60000) / sampleMs).toFixed(1));
+                }
                 if (volumeLevel) update.volumeLevel = volumeLevel;
 
-                const signature = `${update.pace ?? ''}|${update.volumeLevel ?? ''}|${fillerTotal}|${JSON.stringify(fillerBreakdown)}`;
+                const signature = `${update.pace ?? ''}|${update.paceWpm ?? ''}|${update.volumeLevel ?? ''}|${fillerTotal}|${JSON.stringify(fillerBreakdown)}`;
                 if (signature === lastDerivedSignatureRef.current) return;
                 lastDerivedSignatureRef.current = signature;
                 onIndicatorsUpdate(update);
@@ -985,25 +1036,39 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
             }
 
             if (message.toolCall) {
-              const call = message.toolCall.functionCalls.find(fc => fc.name === 'updateIndicators');
-              if (call && onIndicatorsUpdate) {
-                console.log(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
-                  pace: call.args?.pace,
-                  eyeContact: call.args?.eyeContact,
-                  overallScore: call.args?.overallScore,
-                  latencyNote: 'Check gap between video frame sends and this timestamp'
-                });
-                if (call.args && typeof call.args === 'object') {
-                  const update = { ...(call.args as IndicatorUpdate) };
-                  if (localVisualActiveRef.current) {
-                    delete update.eyeContact;
-                    delete update.posture;
-                  }
-                  if (Object.keys(update).length > 0) {
-                    onIndicatorsUpdate(update);
+              for (const call of message.toolCall.functionCalls) {
+                if (call.name === 'updateIndicators' && onIndicatorsUpdate) {
+                  console.log(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
+                    pace: call.args?.pace,
+                    eyeContact: call.args?.eyeContact,
+                    overallScore: call.args?.overallScore,
+                    currentSlide: call.args?.currentSlide,
+                    agentMode: call.args?.agentMode,
+                  });
+                  if (call.args && typeof call.args === 'object') {
+                    const update = { ...(call.args as IndicatorUpdate) };
+                    if (localVisualActiveRef.current) {
+                      delete update.eyeContact;
+                      delete update.posture;
+                    }
+                    if (Object.keys(update).length > 0) {
+                      onIndicatorsUpdate(update);
+                    }
                   }
                 }
-                // Send tool response
+
+                if (call.name === 'saveSlideAnalysis' && onSlideAnalysis && call.args && typeof call.args === 'object') {
+                  const payload = call.args as unknown as SlideAnalysisToolPayload;
+                  if (typeof payload.slideNumber === 'number' && Array.isArray(payload.issues) && typeof payload.riskLevel === 'string') {
+                    onSlideAnalysis({
+                      slideNumber: payload.slideNumber,
+                      issues: payload.issues,
+                      bestPhrase: payload.bestPhrase ?? '',
+                      riskLevel: payload.riskLevel,
+                    });
+                  }
+                }
+
                 withOpenSession((session) => {
                   try {
                     session.sendToolResponse({
@@ -1056,7 +1121,7 @@ export function useLiveAPI({ mode, contextText, onIndicatorsUpdate }: { mode: 'r
       setError(err.message);
       disconnect({ skipSessionClose: true });
     }
-  }, [mode, onIndicatorsUpdate, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
+  }, [mode, onIndicatorsUpdate, onSlideAnalysis, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
 
   return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }

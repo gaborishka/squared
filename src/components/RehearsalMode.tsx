@@ -1,202 +1,80 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { ArrowLeft, Activity, Upload, Type, FileText } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, AlertCircle, Mic, Sparkles } from 'lucide-react';
+import { api } from '../api/client';
 import { useLiveAPI } from '../hooks/useLiveAPI';
-import { SessionInsights } from './SessionInsights';
+import {
+  buildRehearsalContext,
+  createSessionMetricsTracker,
+  feedbackCategoryFromMessage,
+  feedbackSeverityFromAgentMode,
+  formatTimestampFromStart,
+  ingestIndicatorSample,
+  mergeSlideAnalysis,
+  summarizeSessionMetrics,
+} from '../lib/session';
 import { CameraOverlay } from './CameraOverlay';
+import { SessionInsights } from './SessionInsights';
 import { AnalyzingPulse } from './AnalyzingPulse';
-import { FeedbackItem } from './FeedbackTimeline';
-import { ContextModal } from './ContextModal';
-import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, mergeIndicatorData } from '../types';
+import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, ProjectAnalysis, ProjectDetails, mergeIndicatorData } from '../types';
+import type { FeedbackItem } from './FeedbackTimeline';
 
-const AGENT_BIN_INDICES = [1, 2, 4, 6];
-const AGENT_IDLE_SCALE = 0.22;
-const AGENT_MAX_SCALE = 1;
-const AGENT_TARGET_FPS = 40;
-const AGENT_FRAME_INTERVAL_MS = 1000 / AGENT_TARGET_FPS;
-const AGENT_ATTACK = 0.48;
-const AGENT_RELEASE = 0.22;
-const AGENT_NOISE_FLOOR_ADAPT = 0.03;
-const AGENT_GATE_OFFSET = 0.018;
-const AGENT_SILENCE_MARGIN = 0.006;
-const AGENT_SILENCE_HOLD_FRAMES = 4;
-const SECTION_GLOW_TARGET_FPS = 30;
-const SECTION_GLOW_FRAME_INTERVAL_MS = 1000 / SECTION_GLOW_TARGET_FPS;
-const AGENT_GLOW_BINS = [1, 2, 4, 6];
-
-type AudioLevelTracker = {
-  data: Uint8Array | null;
-  level: number;
-  noiseFloor: number;
-  silenceFrames: number;
-};
-
-const createLevelTracker = (initialFloor = 0.012): AudioLevelTracker => ({
-  data: null,
-  level: 0,
-  noiseFloor: initialFloor,
-  silenceFrames: 0,
-});
-
-function sampleAudioLevel(
-  analyser: AnalyserNode | null,
-  bins: number[],
-  tracker: AudioLevelTracker,
-  options: {
-    attack: number;
-    release: number;
-    floorAdapt: number;
-    gateOffset: number;
-    silenceMargin: number;
-    silenceHoldFrames: number;
-  },
-) {
-  if (!analyser) {
-    tracker.level *= 0.75;
-    tracker.silenceFrames = options.silenceHoldFrames + 1;
-    return tracker.level;
-  }
-
-  const length = analyser.frequencyBinCount;
-  if (!tracker.data || tracker.data.length !== length) {
-    tracker.data = new Uint8Array(length);
-  }
-
-  analyser.getByteFrequencyData(tracker.data);
-  let frameEnergy = 0;
-  for (let i = 0; i < bins.length; i++) {
-    const bin = Math.min(bins[i], tracker.data.length - 1);
-    frameEnergy += (tracker.data[bin] ?? 0) / 255;
-  }
-  frameEnergy /= bins.length;
-
-  const floorTarget = Math.min(frameEnergy, 0.09);
-  tracker.noiseFloor = (tracker.noiseFloor * (1 - options.floorAdapt)) + (floorTarget * options.floorAdapt);
-  const gate = Math.min(0.28, tracker.noiseFloor + options.gateOffset);
-
-  if (frameEnergy < gate + options.silenceMargin) {
-    tracker.silenceFrames += 1;
-  } else {
-    tracker.silenceFrames = 0;
-  }
-
-  const lockToIdle = tracker.silenceFrames > options.silenceHoldFrames;
-  const cleaned = lockToIdle ? 0 : Math.max(0, (frameEnergy - gate) / Math.max(0.001, 1 - gate));
-  const curved = Math.pow(cleaned, 0.72);
-  const smoothing = curved > tracker.level ? options.attack : options.release;
-  tracker.level += (curved - tracker.level) * smoothing;
-
-  return tracker.level;
+interface RehearsalModeProps {
+  project: ProjectDetails;
+  onBack: () => void;
+  onSessionEnd: () => void;
 }
 
-const AgentWaveform = ({ analyser, isSpeaking }: { analyser: AnalyserNode | null, isSpeaking: boolean }) => {
-  const barsContainerRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number>(0);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
-  const levelsRef = useRef<number[]>(Array(AGENT_BIN_INDICES.length).fill(0));
-  const noiseFloorRef = useRef(0.01);
-  const silenceFramesRef = useRef(0);
-
-  useEffect(() => {
-    const container = barsContainerRef.current;
-    if (!container) return;
-
-    const barEls = Array.from(container.children) as HTMLElement[];
-    let lastFrameTime = 0;
-
-    const tick = (timestamp: number) => {
-      if (timestamp - lastFrameTime < AGENT_FRAME_INTERVAL_MS) {
-        rafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-      lastFrameTime = timestamp;
-
-      if (!analyser || !isSpeaking) {
-        silenceFramesRef.current = AGENT_SILENCE_HOLD_FRAMES + 1;
-        for (let i = 0; i < AGENT_BIN_INDICES.length; i++) {
-          levelsRef.current[i] *= 0.65;
-          const scale = AGENT_IDLE_SCALE + levelsRef.current[i] * (AGENT_MAX_SCALE - AGENT_IDLE_SCALE);
-          barEls[i].style.transform = `scaleY(${scale.toFixed(3)})`;
-        }
-        rafRef.current = requestAnimationFrame(tick);
-        return;
-      }
-
-      const requiredLength = analyser.frequencyBinCount;
-      if (!dataArrayRef.current || dataArrayRef.current.length !== requiredLength) {
-        dataArrayRef.current = new Uint8Array(requiredLength);
-      }
-
-      analyser.smoothingTimeConstant = 0.6;
-      const dataArray = dataArrayRef.current;
-      analyser.getByteFrequencyData(dataArray);
-
-      let frameEnergy = 0;
-      for (let i = 0; i < AGENT_BIN_INDICES.length; i++) {
-        const binIndex = Math.min(AGENT_BIN_INDICES[i], dataArray.length - 1);
-        frameEnergy += (dataArray[binIndex] ?? 0) / 255;
-      }
-      frameEnergy /= AGENT_BIN_INDICES.length;
-
-      const floorTarget = Math.min(frameEnergy, 0.06);
-      noiseFloorRef.current = (noiseFloorRef.current * (1 - AGENT_NOISE_FLOOR_ADAPT)) + (floorTarget * AGENT_NOISE_FLOOR_ADAPT);
-      const gate = Math.min(0.2, noiseFloorRef.current + AGENT_GATE_OFFSET);
-
-      if (frameEnergy < gate + AGENT_SILENCE_MARGIN) {
-        silenceFramesRef.current += 1;
-      } else {
-        silenceFramesRef.current = 0;
-      }
-
-      const lockToIdle = silenceFramesRef.current > AGENT_SILENCE_HOLD_FRAMES;
-
-      for (let i = 0; i < AGENT_BIN_INDICES.length; i++) {
-        const binIndex = Math.min(AGENT_BIN_INDICES[i], dataArray.length - 1);
-        const raw = (dataArray[binIndex] ?? 0) / 255;
-        const cleaned = lockToIdle ? 0 : Math.max(0, (raw - gate) / Math.max(0.001, 1 - gate));
-        const curved = Math.pow(cleaned, 0.68);
-        const prev = levelsRef.current[i];
-        const smoothing = curved > prev ? AGENT_ATTACK : AGENT_RELEASE;
-        const next = prev + (curved - prev) * smoothing;
-
-        levelsRef.current[i] = next;
-        const scale = AGENT_IDLE_SCALE + next * (AGENT_MAX_SCALE - AGENT_IDLE_SCALE);
-        barEls[i].style.transform = `scaleY(${Math.max(AGENT_IDLE_SCALE, scale).toFixed(3)})`;
-      }
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [analyser, isSpeaking]);
-
-  return (
-    <div ref={barsContainerRef} className="flex items-center space-x-[2px] h-3">
-      <div className="w-[3px] h-full bg-emerald-500 rounded-full origin-bottom will-change-transform" style={{ transform: `scaleY(${AGENT_IDLE_SCALE})` }} />
-      <div className="w-[3px] h-full bg-emerald-500 rounded-full origin-bottom will-change-transform" style={{ transform: `scaleY(${AGENT_IDLE_SCALE})` }} />
-      <div className="w-[3px] h-full bg-emerald-500 rounded-full origin-bottom will-change-transform" style={{ transform: `scaleY(${AGENT_IDLE_SCALE})` }} />
-      <div className="w-[3px] h-full bg-emerald-500 rounded-full origin-bottom will-change-transform" style={{ transform: `scaleY(${AGENT_IDLE_SCALE})` }} />
-    </div>
-  );
-};
-
-export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, onSessionEnd: () => void }) {
+export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const insightsPanelRef = useRef<HTMLDivElement>(null);
-  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
-  const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
-  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
-  const [contextText, setContextText] = useState<string>('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const sessionStartTimeRef = useRef<number | null>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
+  const metricsTrackerRef = useRef(createSessionMetricsTracker());
+  const feedbackPayloadRef = useRef<Array<{
+    id: string;
+    timestamp: string;
+    message: string;
+    slideNumber: number | null;
+    severity: 'info' | 'warning' | 'critical';
+    category: ReturnType<typeof feedbackCategoryFromMessage>;
+  }>>([]);
+  const slideAnalysisMapRef = useRef(
+    new Map<number, { slideNumber: number; issues: string[]; bestPhrase: string; riskLevel: 'safe' | 'watch' | 'fragile' }>(),
+  );
+  const lastFeedbackMessageRef = useRef('');
+  const sessionStartTimeRef = useRef<number | null>(null);
+
+  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
+  const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
+  const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+    setAnalysisLoading(true);
+    api.getProjectAnalysis(project.id)
+      .then((result) => {
+        if (isActive) setAnalysis(result);
+      })
+      .catch((error) => {
+        console.warn('Failed to load project analysis for rehearsal context', error);
+        if (isActive) setAnalysis(null);
+      })
+      .finally(() => {
+        if (isActive) setAnalysisLoading(false);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [project.id]);
+
+  const contextText = useMemo(() => buildRehearsalContext(project, analysis), [project, analysis]);
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
     if (previewStream) {
-      previewStream.getTracks().forEach(track => track.stop());
+      previewStream.getTracks().forEach((track) => track.stop());
       previewStreamRef.current = null;
     }
     if (videoRef.current && videoRef.current.srcObject === previewStream) {
@@ -209,50 +87,62 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       if (liveSessionActiveRef.current) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
       previewStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-    } catch (err) {
-      console.warn("Could not get preview stream", err);
+    } catch (error) {
+      console.warn('Could not get preview stream', error);
     }
   }, []);
-
-  useEffect(() => {
-    return () => stopPreview();
-  }, [stopPreview]);
 
   const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
-    setIndicators(prev => mergeIndicatorData(prev, update));
+    setIndicators((previous) => {
+      const next = mergeIndicatorData(previous, update);
+      ingestIndicatorSample(metricsTrackerRef.current, next);
 
-    if (update.feedbackMessage?.trim()) {
-      setFeedbackHistory(prev => {
-        let timeStr = "00:00";
-        if (sessionStartTimeRef.current) {
-          const diffMs = Date.now() - sessionStartTimeRef.current;
-          const mins = Math.floor(diffMs / 60000);
-          const secs = Math.floor((diffMs % 60000) / 1000);
-          timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
-        }
-
-        const newItem: FeedbackItem = {
-          id: Math.random().toString(36).substring(7),
-          timestamp: timeStr,
-          message: update.feedbackMessage
+      const feedbackMessage = update.feedbackMessage?.trim();
+      if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
+        lastFeedbackMessageRef.current = feedbackMessage;
+        const timestamp = formatTimestampFromStart(sessionStartTimeRef.current);
+        const feedbackEntry: FeedbackItem = {
+          id: crypto.randomUUID(),
+          timestamp,
+          message: feedbackMessage,
         };
 
-        return [newItem, ...prev]; // Prepend new items
-      });
-    }
+        feedbackPayloadRef.current.unshift({
+          ...feedbackEntry,
+          slideNumber: next.currentSlide,
+          severity: feedbackSeverityFromAgentMode(next.agentMode),
+          category: feedbackCategoryFromMessage(feedbackMessage),
+        });
+        setFeedbackHistory((current) => [feedbackEntry, ...current]);
+      }
+
+      return next;
+    });
   }, []);
 
-  const { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking } = useLiveAPI({
+  const {
+    isConnected,
+    isConnecting,
+    error,
+    connect,
+    disconnect,
+    analyserRef,
+    playbackAnalyserRef,
+    isSpeaking,
+  } = useLiveAPI({
     mode: 'rehearsal',
     contextText,
-    onIndicatorsUpdate: handleIndicatorsUpdate
+    onIndicatorsUpdate: handleIndicatorsUpdate,
+    onSlideAnalysis: (payload) => {
+      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
+    },
   });
 
   useEffect(() => {
@@ -260,118 +150,41 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
-    if (isConnected) {
-      const now = Date.now();
-      setSessionStartTime(now);
-      sessionStartTimeRef.current = now;
-      setFeedbackHistory([{
-        id: 'start',
-        timestamp: '00:00',
-        message: 'Session started'
-      }]);
-    } else {
-      setSessionStartTime(null);
-      sessionStartTimeRef.current = null;
-      setIndicators(null);
-      setFeedbackHistory([]);
-    }
-  }, [isConnected]);
+    return () => stopPreview();
+  }, [stopPreview]);
 
   useEffect(() => {
     if (isConnected || isConnecting) {
       stopPreview();
       return;
     }
-    startPreview();
+    void startPreview();
   }, [isConnected, isConnecting, startPreview, stopPreview]);
 
   useEffect(() => {
     return () => disconnect();
   }, [disconnect]);
 
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result;
-      if (typeof text === 'string') {
-        setContextText(prev => prev ? prev + '\n\n' + text : text);
-        setIsModalOpen(true);
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+  const resetSessionState = useCallback(() => {
+    const now = Date.now();
+    metricsTrackerRef.current = createSessionMetricsTracker();
+    feedbackPayloadRef.current = [];
+    slideAnalysisMapRef.current = new Map();
+    lastFeedbackMessageRef.current = '';
+    setIndicators(null);
+    setFeedbackHistory([]);
+    setSessionStartTime(now);
+    sessionStartTimeRef.current = now;
   }, []);
 
   useEffect(() => {
-    const insightsPanel = insightsPanelRef.current;
-
-    const resetGlow = () => {
-      if (insightsPanel) {
-        insightsPanel.style.boxShadow = '';
-        insightsPanel.style.borderColor = '';
-      }
-    };
-
-    if (!insightsPanel || !isConnected) {
-      resetGlow();
-      return;
+    if (isConnected) {
+      resetSessionState();
+    } else if (!isConnecting) {
+      setSessionStartTime(null);
+      sessionStartTimeRef.current = null;
     }
-
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      resetGlow();
-      return;
-    }
-
-    const agentTracker = createLevelTracker(0.01);
-    let rafId = 0;
-    let lastFrameTime = 0;
-
-    const tick = (timestamp: number) => {
-      if (timestamp - lastFrameTime < SECTION_GLOW_FRAME_INTERVAL_MS) {
-        rafId = requestAnimationFrame(tick);
-        return;
-      }
-      lastFrameTime = timestamp;
-
-      const agentLevel = isSpeaking
-        ? sampleAudioLevel(playbackAnalyserRef.current, AGENT_GLOW_BINS, agentTracker, {
-          attack: 0.46,
-          release: 0.24,
-          floorAdapt: 0.03,
-          gateOffset: 0.018,
-          silenceMargin: 0.007,
-          silenceHoldFrames: 4,
-        })
-        : sampleAudioLevel(null, AGENT_GLOW_BINS, agentTracker, {
-          attack: 0.46,
-          release: 0.24,
-          floorAdapt: 0.03,
-          gateOffset: 0.018,
-          silenceMargin: 0.007,
-          silenceHoldFrames: 4,
-        });
-
-      const agentGlow = Math.min(1, agentLevel * 1.45);
-
-      insightsPanel.style.boxShadow = agentGlow > 0.02
-        ? `0 0 ${10 + agentGlow * 20}px rgba(16, 185, 129, ${0.1 + agentGlow * 0.2}), inset 0 0 ${6 + agentGlow * 10}px rgba(16, 185, 129, ${0.06 + agentGlow * 0.12})`
-        : '';
-      insightsPanel.style.borderColor = agentGlow > 0.03
-        ? `rgba(52, 211, 153, ${0.34 + agentGlow * 0.36})`
-        : '';
-
-      rafId = requestAnimationFrame(tick);
-    };
-
-    rafId = requestAnimationFrame(tick);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      resetGlow();
-    };
-  }, [isConnected, isSpeaking, analyserRef, playbackAnalyserRef]);
+  }, [isConnected, isConnecting, resetSessionState]);
 
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
@@ -379,24 +192,26 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
         try {
-          await fetch('/api/runs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              run: {
-                id: crypto.randomUUID(),
-                mode: 'rehearsal',
-                duration
-              },
-              feedbacks: feedbackHistory
-            })
+          await api.saveRun({
+            run: {
+              id: crypto.randomUUID(),
+              projectId: project.id,
+              mode: 'rehearsal',
+              duration,
+              ...summarizeSessionMetrics(metricsTrackerRef.current),
+            },
+            feedbacks: feedbackPayloadRef.current,
+            slideAnalyses: Array.from(slideAnalysisMapRef.current.values()),
           });
-        } catch (e) {
-          console.error('Failed to save session:', e);
+        } catch (saveError) {
+          console.error('Failed to save rehearsal session:', saveError);
         }
         onSessionEnd();
       }
-    } else if (videoRef.current) {
+      return;
+    }
+
+    if (videoRef.current) {
       stopPreview();
       connect(videoRef.current);
     }
@@ -404,45 +219,37 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
 
   return (
     <div className="h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/50 backdrop-blur-md">
+      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
         <button onClick={onBack} className="flex items-center text-zinc-400 hover:text-white transition-colors">
           <ArrowLeft className="w-5 h-5 mr-2" /> Back
         </button>
-        <div className="flex items-center space-x-2">
-          {isConnected && isSpeaking ? (
-            <AgentWaveform analyser={playbackAnalyserRef.current} isSpeaking={isSpeaking} />
-          ) : (
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
-          )}
+        <div className="text-center">
+          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Rehearsal</p>
+          <h1 className="text-lg font-semibold text-zinc-100">{project.name}</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
           <span className="text-sm font-medium text-zinc-300">
-            {isConnecting ? 'Connecting...' : isConnected ? (isSpeaking ? 'Coach is speaking...' : 'Live Coach Active') : 'Ready to Rehearse'}
+            {isConnecting ? 'Connecting...' : isConnected ? (isSpeaking ? 'Coach speaking' : 'Live coach active') : 'Ready'}
           </span>
         </div>
       </header>
 
       <main className="flex-1 flex p-6 gap-6 min-h-0">
-        <div className="flex-1 relative bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800 flex flex-col">
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="w-full h-full object-cover"
-          />
+        <section className="flex-1 relative rounded-[32px] overflow-hidden border border-zinc-800 bg-zinc-900 flex flex-col">
+          <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          {indicators && <CameraOverlay data={indicators} variant="rehearsal" />}
 
-          {/* HUD Overlay for Camera */}
-          {indicators && <CameraOverlay data={indicators} />}
-
-          {/* Overlay Controls */}
           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
             <button
               onClick={handleToggleConnect}
-              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${isConnected || isConnecting
-                ? 'bg-red-500/10 text-red-500 hover:bg-red-500/20'
-                : 'bg-indigo-500 text-white hover:bg-indigo-600'
-                }`}
+              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
+                isConnected || isConnecting
+                  ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                  : 'bg-indigo-500 text-white hover:bg-indigo-400'
+              }`}
             >
-              {isConnected || isConnecting ? 'End Session' : 'Start Rehearsal'}
+              {isConnected || isConnecting ? 'End Rehearsal' : 'Start Rehearsal'}
             </button>
           </div>
 
@@ -451,13 +258,58 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
               {error}
             </div>
           )}
-        </div>
+        </section>
 
-        <div className="w-[360px] flex flex-col gap-6">
-          <div ref={insightsPanelRef} className="bg-zinc-900 border border-zinc-800 rounded-3xl p-6 flex-1 overflow-y-auto flex flex-col min-h-[500px] transition-[border-color,box-shadow] duration-150">
-            <h3 className="text-lg font-semibold mb-4 flex items-center shrink-0">
-              <Activity className="w-5 h-5 mr-2 text-indigo-400" />
-              Session Insights
+        <aside className="w-[380px] shrink-0 flex flex-col gap-6">
+          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6">
+            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Project context</p>
+            <h2 className="text-2xl font-semibold text-zinc-50 mt-2">{project.slideCount} slides in play</h2>
+            <p className="text-sm text-zinc-400 mt-3">
+              {project.description || 'No project description yet. The rehearsal prompt still includes the extracted slide structure.'}
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-3">
+              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Risk segments</div>
+                <div className="text-2xl font-semibold text-zinc-100 mt-2">
+                  {analysisLoading ? '--' : analysis?.riskSegments.length ?? 0}
+                </div>
+              </div>
+              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
+                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Rehearsals</div>
+                <div className="text-2xl font-semibold text-zinc-100 mt-2">
+                  {analysisLoading ? '--' : analysis?.rehearsalRuns ?? 0}
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 space-y-3 max-h-44 overflow-y-auto pr-1">
+              {analysisLoading ? (
+                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+                  Loading prior weak spots…
+                </div>
+              ) : analysis?.riskSegments.length ? (
+                analysis.riskSegments.slice(0, 4).map((segment) => (
+                  <div key={segment.id} className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-zinc-100">
+                        Slide {segment.slideNumber ?? '?'}
+                      </span>
+                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">{segment.riskType}</span>
+                    </div>
+                    <p className="text-sm text-zinc-400 mt-2 line-clamp-2">{segment.notes}</p>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-[24px] border border-dashed border-zinc-700 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+                  No rehearsal history yet. This session will create the first slide-level memory.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6 flex-1 min-h-0">
+            <h3 className="text-lg font-semibold mb-4 flex items-center">
+              <Mic className="w-5 h-5 mr-2 text-indigo-400" />
+              Session insights
             </h3>
             {isConnected ? (
               <SessionInsights
@@ -466,72 +318,42 @@ export function RehearsalMode({ onBack, onSessionEnd }: { onBack: () => void, on
                 analyserRef={analyserRef}
               />
             ) : isConnecting ? (
-              <div className="flex-1 flex items-center justify-center min-h-[300px]">
+              <div className="flex h-full items-center justify-center">
                 <AnalyzingPulse />
               </div>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center min-h-[300px] text-center px-6">
-                <div className="w-16 h-16 rounded-full bg-zinc-800/50 flex items-center justify-center mb-4 ring-1 ring-zinc-700/50">
-                  <Activity className="w-8 h-8 text-zinc-500" />
-                </div>
-                <h4 className="text-zinc-300 font-medium mb-2">Ready to Start</h4>
-                <p className="text-zinc-500 text-sm max-w-[250px] mb-6">
-                  Click <strong>Start Rehearsal</strong> when you're ready. The AI coach will analyze your performance in real-time.
-                </p>
-                <div className="w-full text-left space-y-3">
-                  <span className="block text-sm font-medium text-zinc-300">
-                    Speech Plan (Optional)
-                  </span>
-                  <div className="flex gap-3 mt-2">
-                    <button
-                      onClick={() => setIsModalOpen(true)}
-                      className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50"
-                    >
-                      <Type className="w-4 h-4 text-indigo-400" />
-                      Add Text
-                    </button>
-                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-xl transition-colors ring-1 ring-zinc-700/50">
-                      <Upload className="w-4 h-4 text-emerald-400" />
-                      Upload File
-                      <input
-                        type="file"
-                        accept=".txt,.md,.csv,.json"
-                        className="hidden"
-                        onChange={handleFileUpload}
-                      />
-                    </label>
-                  </div>
-                  {contextText && (
-                    <div className="mt-4 p-3 bg-zinc-950/50 border border-zinc-800 rounded-xl flex items-start gap-3 relative group">
-                      <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center shrink-0">
-                        <FileText className="w-4 h-4 text-indigo-400" />
-                      </div>
-                      <div className="flex-1 min-w-0 pr-12">
-                        <p className="text-sm text-zinc-300 font-medium truncate">Speech plan attached</p>
-                        <p className="text-xs text-zinc-500 truncate">{contextText.length} characters</p>
-                      </div>
-                      <button
-                        onClick={() => setIsModalOpen(true)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-indigo-400 hover:text-indigo-300 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        Edit
-                      </button>
+              <div className="h-full flex flex-col justify-between">
+                <div>
+                  <p className="text-sm text-zinc-400 leading-relaxed">
+                    The rehearsal prompt already includes deck structure, prior risk segments, and instructions to write slide-level analysis as you practice.
+                  </p>
+                  <div className="mt-5 rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-300">
+                    <div className="flex items-center gap-2 text-zinc-100 font-medium">
+                      <Sparkles className="w-4 h-4 text-emerald-400" />
+                      Context loaded
                     </div>
-                  )}
+                    <p className="mt-2 text-zinc-400">
+                      {project.slides.length > 0
+                        ? `Slides, speaker notes, and prior weak spots are ready for Gemini.`
+                        : `Project description is loaded; upload a deck later to get slide-aware coaching.`}
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
+                  {sessionStartTime ? `Last session started at ${new Date(sessionStartTime).toLocaleTimeString()}` : 'Start rehearsal when ready.'}
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </aside>
       </main>
 
-      <ContextModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        contextText={contextText}
-        setContextText={setContextText}
-        title="Speech Plan"
-      />
+      {!analysisLoading && !analysis && (
+        <div className="fixed bottom-6 right-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 flex items-center gap-3">
+          <AlertCircle className="w-4 h-4" />
+          Rehearsal memory is empty for this project. This session will bootstrap it.
+        </div>
+      )}
     </div>
   );
 }
