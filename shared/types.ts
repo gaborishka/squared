@@ -198,6 +198,11 @@ export interface OverlayState {
   currentSlide: number | null;
 }
 
+export interface DesktopAppStatus {
+  mode: 'idle' | 'rehearsal' | 'presentation';
+  connected: boolean;
+}
+
 export interface ParsedUpload {
   fileType: ProjectFileType;
   content: string;

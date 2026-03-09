@@ -1,5 +1,4 @@
 import { BrowserWindow, screen } from 'electron';
-import path from 'node:path';
 import type { OverlayState } from '../shared/types.js';
 
 function getOverlayBounds() {
@@ -14,7 +13,7 @@ function getOverlayBounds() {
   };
 }
 
-export function createOverlayWindow(preloadPath: string, projectRoot: string): BrowserWindow {
+export function createOverlayWindow(preloadPath: string, overlayHtmlPath: string): BrowserWindow {
   const bounds = getOverlayBounds();
   const window = new BrowserWindow({
     ...bounds,
@@ -39,7 +38,7 @@ export function createOverlayWindow(preloadPath: string, projectRoot: string): B
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setIgnoreMouseEvents(true, { forward: true });
   window.setContentProtection(true);
-  void window.loadFile(path.resolve(projectRoot, 'electron/overlay.html'));
+  void window.loadFile(overlayHtmlPath);
   return window;
 }
 

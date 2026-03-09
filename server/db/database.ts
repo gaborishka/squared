@@ -5,8 +5,8 @@ let db: Database.Database | null = null;
 
 export function getDatabase(): Database.Database {
   if (db) return db;
-  prepareDatabaseFile();
+  const { legacyImportPath } = prepareDatabaseFile();
   db = new Database(DATABASE_PATH);
-  applySchema(db);
+  applySchema(db, legacyImportPath);
   return db;
 }

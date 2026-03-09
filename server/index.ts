@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analysesRouter } from './routes/analyses.js';
 import { projectsRouter } from './routes/projects.js';
@@ -17,6 +18,23 @@ app.get('/api/health', (_req, res) => {
 app.use('/api/projects', projectsRouter);
 app.use('/api/runs', runsRouter);
 app.use('/api', analysesRouter);
+
+const configuredStaticDir = process.env.SQUARED_STATIC_DIR?.trim();
+if (configuredStaticDir) {
+  const staticDir = path.resolve(configuredStaticDir);
+  app.use(express.static(staticDir));
+
+  app.get(/^(?!\/api(?:\/|$)).*/, (req, res, next) => {
+    const acceptsHtml = req.accepts(['html', 'json']) === 'html';
+    const hasFileExtension = path.extname(req.path) !== '';
+    if (!acceptsHtml || hasFileExtension) {
+      next();
+      return;
+    }
+
+    res.sendFile(path.join(staticDir, 'index.html'));
+  });
+}
 
 app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(error);

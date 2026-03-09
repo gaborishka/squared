@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Clock3, FilePenLine, LoaderCircle, Mic, Plus, Presentation, Sparkles } from 'lucide-react';
+import squaredLogo from '../../logo-squared-v5.svg';
 import { api } from '../api/client';
 import type { GamePlan, ProjectAnalysis, ProjectDetails, RunDetails, RunSummary } from '../types';
 import { GamePlanView } from './GamePlanView';
@@ -159,7 +160,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
 
             <section className="flex-1 min-w-0 space-y-6">
               <div className="rounded-[32px] border border-zinc-800 bg-gradient-to-br from-zinc-900 via-zinc-950 to-zinc-900 p-6 md:p-8">
-                <img src="/logo-squared-v5.svg" alt="Squared logo" className="h-14 w-auto mb-5" />
+                <img src={squaredLogo} alt="Squared logo" className="h-14 w-auto mb-5" />
                 <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
                   <div className="max-w-3xl">
                     <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Squared v2</p>

@@ -186,6 +186,22 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     }
   }, [isConnected, isConnecting, resetSessionState]);
 
+  useEffect(() => {
+    if (window.squaredElectron?.setAppStatus) {
+      if (isConnected) {
+        window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: true });
+      } else if (isConnecting) {
+        window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: false });
+      } else {
+        window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
+      }
+    }
+  }, [isConnected, isConnecting]);
+
+  useEffect(() => () => {
+    window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
+  }, []);
+
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();

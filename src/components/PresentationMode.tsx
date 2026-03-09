@@ -143,6 +143,18 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
+    if (window.squaredElectron?.setAppStatus) {
+      if (isConnected) {
+        window.squaredElectron.setAppStatus({ mode: 'presentation', connected: true });
+      } else if (isConnecting) {
+        window.squaredElectron.setAppStatus({ mode: 'presentation', connected: false });
+      } else {
+        window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
+      }
+    }
+  }, [isConnected, isConnecting]);
+
+  useEffect(() => {
     const overlayState = indicatorToOverlayState(indicators);
     if (window.squaredElectron?.updateOverlay) {
       window.squaredElectron.updateOverlay(overlayState);
@@ -152,6 +164,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
   useEffect(() => {
     return () => {
       window.squaredElectron?.clearOverlay?.();
+      window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
     };
   }, []);
 

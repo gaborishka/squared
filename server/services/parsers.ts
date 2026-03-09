@@ -2,8 +2,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
 import type { ParsedUpload, ProjectFileType } from '../../shared/types.js';
+import { getUploadsDir } from '../config/paths.js';
 
-const uploadsDir = path.resolve(process.cwd(), 'server/storage/uploads');
+const uploadsDir = getUploadsDir();
 
 function inferFileType(fileName: string): ProjectFileType {
   const ext = path.extname(fileName).toLowerCase();
