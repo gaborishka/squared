@@ -1,39 +1,38 @@
 import { motion } from 'motion/react';
 
-export function OverallScoreRing({ score }: { score: number }) {
-    const radius = 36;
-    const strokeWidth = 8;
+export function OverallScoreRing({ score, size = 96 }: { score: number; size?: number }) {
+    const half = size / 2;
+    const strokeWidth = Math.round(size * 0.07);
+    const radius = half - strokeWidth;
     const circumference = 2 * Math.PI * radius;
     const strokeDashoffset = circumference - (score / 100) * circumference;
 
     let color = '#10B981'; // emerald-500
-    let label = 'Great performance';
+    let label = 'Great';
 
     if (score < 40) {
         color = '#EF4444'; // red-500
         label = 'Needs work';
     } else if (score < 70) {
         color = '#F59E0B'; // amber-500
-        label = 'Good progress';
+        label = 'Good';
     }
 
     return (
-        <div className="flex flex-col items-center">
-            <div className="relative flex items-center justify-center w-24 h-24 mb-2">
-                {/* Background Ring */}
-                <svg className="absolute w-full h-full transform -rotate-90">
+        <div className="flex flex-col items-center gap-1">
+            <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
+                <svg className="absolute w-full h-full -rotate-90" viewBox={`0 0 ${size} ${size}`}>
                     <circle
-                        cx="48"
-                        cy="48"
+                        cx={half}
+                        cy={half}
                         r={radius}
                         strokeWidth={strokeWidth}
-                        stroke="#27272a" // zinc-800
+                        stroke="#27272a"
                         fill="transparent"
                     />
-                    {/* Progress Ring */}
                     <motion.circle
-                        cx="48"
-                        cy="48"
+                        cx={half}
+                        cy={half}
                         r={radius}
                         strokeWidth={strokeWidth}
                         stroke={color}
@@ -46,11 +45,10 @@ export function OverallScoreRing({ score }: { score: number }) {
                     />
                 </svg>
                 <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-2xl font-bold text-white leading-none">{Math.round(score)}</span>
-                    <span className="text-[10px] text-zinc-400 font-medium mt-1">/ 100</span>
+                    <span className="text-xl font-bold text-white leading-none">{Math.round(score)}</span>
                 </div>
             </div>
-            <div className="text-sm font-medium text-zinc-300">{label}</div>
+            <span className="text-[10px] text-zinc-500 font-medium">{label}</span>
         </div>
     );
 }

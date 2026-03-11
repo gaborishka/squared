@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, AlertCircle, Mic, Sparkles } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Mic, Video, Phone, Sparkles } from 'lucide-react';
 import { api } from '../api/client';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import {
@@ -233,141 +233,148 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     }
   };
 
+  const riskCount = analysisLoading ? '-' : (analysis?.riskSegments.length ?? 0);
+  const runCount = analysisLoading ? '-' : (analysis?.rehearsalRuns ?? 0);
+  const hasRisks = !analysisLoading && (analysis?.riskSegments.length ?? 0) > 0;
+
   return (
-    <div className="h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
-        <button onClick={onBack} className="flex items-center text-zinc-400 hover:text-white transition-colors">
-          <ArrowLeft className="w-5 h-5 mr-2" /> Back
+    <div className="h-screen flex flex-col bg-zinc-950">
+      {/* Minimal header */}
+      <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back</span>
         </button>
-        <div className="text-center">
-          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Rehearsal</p>
-          <h1 className="text-lg font-semibold text-zinc-100">{project.name}</h1>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-zinc-300 font-medium">{project.name}</span>
+          <span className="text-zinc-700">·</span>
+          <span className="text-xs uppercase tracking-wider text-zinc-600">Rehearsal</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
-          <span className="text-sm font-medium text-zinc-300">
-            {isConnecting ? 'Connecting...' : isConnected ? (isSpeaking ? 'Coach speaking' : 'Live coach active') : 'Ready'}
+          <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
+          <span className="text-xs text-zinc-500">
+            {isConnecting ? 'Connecting' : isConnected ? (isSpeaking ? 'Coach speaking' : 'Live') : 'Ready'}
           </span>
         </div>
       </header>
 
-      <main className="flex-1 flex p-6 gap-6 min-h-0">
-        <section className="flex-1 relative rounded-[32px] overflow-hidden border border-zinc-800 bg-zinc-900 flex flex-col">
+      <main className="flex-1 flex gap-0 min-h-0">
+        {/* Video area */}
+        <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           {indicators && <CameraOverlay data={indicators} variant="rehearsal" />}
 
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
+          {/* Control bar */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
+            <button className="w-10 h-10 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors">
+              <Video className="w-[18px] h-[18px]" />
+            </button>
+            <button className="w-10 h-10 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors">
+              <Mic className="w-[18px] h-[18px]" />
+            </button>
             <button
               onClick={handleToggleConnect}
-              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
+              className={`h-10 px-5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${
                 isConnected || isConnecting
-                  ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                  ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
                   : 'bg-indigo-500 text-white hover:bg-indigo-400'
               }`}
             >
-              {isConnected || isConnecting ? 'End Rehearsal' : 'Start Rehearsal'}
+              {isConnected || isConnecting ? (
+                <>
+                  <Phone className="w-3.5 h-3.5 rotate-[135deg]" />
+                  End
+                </>
+              ) : (
+                'Start'
+              )}
             </button>
           </div>
 
           {error && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md z-10">
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-sm backdrop-blur-md z-10">
               {error}
             </div>
           )}
         </section>
 
-        <aside className="w-[380px] shrink-0 flex flex-col gap-6">
-          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6">
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Project context</p>
-            <h2 className="text-2xl font-semibold text-zinc-50 mt-2">{project.slideCount} slides in play</h2>
-            <p className="text-sm text-zinc-400 mt-3">
-              {project.description || 'No project description yet. The rehearsal prompt still includes the extracted slide structure.'}
-            </p>
-            <div className="mt-5 grid grid-cols-2 gap-3">
-              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Risk segments</div>
-                <div className="text-2xl font-semibold text-zinc-100 mt-2">
-                  {analysisLoading ? '--' : analysis?.riskSegments.length ?? 0}
-                </div>
-              </div>
-              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Rehearsals</div>
-                <div className="text-2xl font-semibold text-zinc-100 mt-2">
-                  {analysisLoading ? '--' : analysis?.rehearsalRuns ?? 0}
-                </div>
-              </div>
-            </div>
-            <div className="mt-5 space-y-3 max-h-44 overflow-y-auto pr-1">
-              {analysisLoading ? (
-                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  Loading prior weak spots…
-                </div>
-              ) : analysis?.riskSegments.length ? (
-                analysis.riskSegments.slice(0, 4).map((segment) => (
-                  <div key={segment.id} className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm font-medium text-zinc-100">
-                        Slide {segment.slideNumber ?? '?'}
-                      </span>
-                      <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">{segment.riskType}</span>
-                    </div>
-                    <p className="text-sm text-zinc-400 mt-2 line-clamp-2">{segment.notes}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-[24px] border border-dashed border-zinc-700 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  No rehearsal history yet. This session will create the first slide-level memory.
-                </div>
-              )}
+        {/* Right panel — single cohesive surface */}
+        <aside className="w-[320px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
+          {/* Project context strip */}
+          <div className="px-4 py-3 flex items-center justify-between text-xs text-zinc-500 border-b border-zinc-800/40">
+            <span className="uppercase tracking-wider font-medium">Project</span>
+            <div className="flex items-center gap-2 text-zinc-400">
+              <span><span className="text-zinc-200 font-semibold">{project.slideCount}</span> slides</span>
+              <span className="text-zinc-700">·</span>
+              <span><span className="text-zinc-200 font-semibold">{riskCount}</span> risks</span>
+              <span className="text-zinc-700">·</span>
+              <span><span className="text-zinc-200 font-semibold">{runCount}</span> runs</span>
             </div>
           </div>
 
-          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6 flex-1 min-h-0">
-            <h3 className="text-lg font-semibold mb-4 flex items-center">
-              <Mic className="w-5 h-5 mr-2 text-indigo-400" />
-              Session insights
-            </h3>
-            {isConnected ? (
-              <SessionInsights
-                data={indicators ?? DEFAULT_INDICATORS}
-                feedbackHistory={feedbackHistory}
-                analyserRef={analyserRef}
-              />
-            ) : isConnecting ? (
-              <div className="flex h-full items-center justify-center">
-                <AnalyzingPulse />
-              </div>
-            ) : (
-              <div className="h-full flex flex-col justify-between">
-                <div>
-                  <p className="text-sm text-zinc-400 leading-relaxed">
-                    The rehearsal prompt already includes deck structure, prior risk segments, and instructions to write slide-level analysis as you practice.
-                  </p>
-                  <div className="mt-5 rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-300">
-                    <div className="flex items-center gap-2 text-zinc-100 font-medium">
-                      <Sparkles className="w-4 h-4 text-emerald-400" />
-                      Context loaded
-                    </div>
-                    <p className="mt-2 text-zinc-400">
-                      {project.slides.length > 0
-                        ? `Slides, speaker notes, and prior weak spots are ready for Gemini.`
-                        : `Project description is loaded; upload a deck later to get slide-aware coaching.`}
-                    </p>
+          {/* Risk segments (only if present) */}
+          {hasRisks && (
+            <div className="px-4 py-3 border-b border-zinc-800/40">
+              <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-2">Prior weak spots</p>
+              <div className="space-y-1.5">
+                {analysis!.riskSegments.slice(0, 3).map((segment) => (
+                  <div key={segment.id} className="flex items-baseline gap-2 text-xs">
+                    <span className="shrink-0 text-zinc-600 font-mono">S{segment.slideNumber ?? '?'}</span>
+                    <span className="text-zinc-400 line-clamp-1 flex-1">{segment.notes}</span>
+                    <span className="shrink-0 text-[10px] text-zinc-600">{segment.riskType}</span>
                   </div>
-                </div>
-                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  {sessionStartTime ? `Last session started at ${new Date(sessionStartTime).toLocaleTimeString()}` : 'Start rehearsal when ready.'}
-                </div>
+                ))}
               </div>
-            )}
+            </div>
+          )}
+
+          {/* Session insights — fills remaining space */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div className="px-4 py-3 flex items-center gap-2 border-b border-zinc-800/40">
+              <Mic className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="text-xs font-medium text-zinc-300">Session insights</span>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
+              {isConnected ? (
+                <SessionInsights
+                  data={indicators ?? DEFAULT_INDICATORS}
+                  feedbackHistory={feedbackHistory}
+                  analyserRef={analyserRef}
+                />
+              ) : isConnecting ? (
+                <div className="flex h-full items-center justify-center">
+                  <AnalyzingPulse />
+                </div>
+              ) : (
+                <div className="flex flex-col h-full justify-between">
+                  <div className="flex items-start gap-2.5 rounded-xl bg-zinc-950/40 px-3.5 py-3">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs text-zinc-300 font-medium">Context loaded</p>
+                      <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
+                        {project.slides.length > 0
+                          ? 'Slides, speaker notes, and prior weak spots are ready.'
+                          : 'Project description loaded. Upload a deck for slide-aware coaching.'}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-zinc-600 text-center py-4">
+                    {sessionStartTime
+                      ? `Last session: ${new Date(sessionStartTime).toLocaleTimeString()}`
+                      : 'Press Start when ready'}
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </aside>
       </main>
 
       {!analysisLoading && !analysis && (
-        <div className="fixed bottom-6 right-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100 flex items-center gap-3">
-          <AlertCircle className="w-4 h-4" />
-          Rehearsal memory is empty for this project. This session will bootstrap it.
+        <div className="fixed bottom-4 right-4 rounded-xl bg-amber-500/10 border border-amber-500/20 px-3.5 py-2.5 text-xs text-amber-200/80 flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5" />
+          First session — rehearsal memory will be created.
         </div>
       )}
     </div>

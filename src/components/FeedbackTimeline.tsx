@@ -9,44 +9,42 @@ export interface FeedbackItem {
 
 function getIconForMessage(message: string) {
     const lowerMsg = message.toLowerCase();
-    if (lowerMsg.match(/eye|look|contact|stare|visual/)) return <Eye className="w-4 h-4" />;
-    if (lowerMsg.match(/volume|loud|quiet|pace|fast|slow|speed|voice|speak/)) return <Mic className="w-4 h-4" />;
-    if (lowerMsg.match(/posture|slouch|straight|back|sit/)) return <User className="w-4 h-4" />;
-    return <MessageSquare className="w-4 h-4" />;
+    if (lowerMsg.match(/eye|look|contact|stare|visual/)) return <Eye className="w-3.5 h-3.5" />;
+    if (lowerMsg.match(/volume|loud|quiet|pace|fast|slow|speed|voice|speak/)) return <Mic className="w-3.5 h-3.5" />;
+    if (lowerMsg.match(/posture|slouch|straight|back|sit/)) return <User className="w-3.5 h-3.5" />;
+    return <MessageSquare className="w-3.5 h-3.5" />;
 }
 
-function getColorForMessage(message: string) {
-    const lowerMsg = message.toLowerCase();
-    // Positive
-    if (lowerMsg.match(/great|good|excellent|perfect|well done|spot on|awesome/)) return 'border-emerald-500';
-    // Warnings / Corrective
-    if (lowerMsg.match(/too (fast|slow|quiet|loud)|try|maybe|slight|could be|away/)) return 'border-amber-500';
-    // Critical / Bad
-    if (lowerMsg.match(/slouch|stop|very (fast|slow|quiet|loud)|barely|cannot|poor/)) return 'border-red-500';
-    // Default
-    return 'border-indigo-500';
+function getAccentColor(message: string): string {
+    const l = message.toLowerCase();
+    if (l.match(/great|good|excellent|perfect|well done|spot on|awesome/)) return 'text-emerald-500';
+    if (l.match(/too (fast|slow|quiet|loud)|try|maybe|slight|could be|away/)) return 'text-amber-500';
+    if (l.match(/slouch|stop|very (fast|slow|quiet|loud)|barely|cannot|poor/)) return 'text-red-500';
+    return 'text-indigo-400';
 }
 
 export function FeedbackTimeline({ feedbackHistory }: { feedbackHistory: FeedbackItem[] }) {
     if (feedbackHistory.length === 0) {
-        return <div className="text-zinc-500 text-sm italic py-4">Waiting for coach feedback...</div>;
+        return <p className="text-zinc-600 text-xs italic py-2">Waiting for coach feedback...</p>;
     }
 
     return (
-        <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
+        <div className="flex-1 overflow-y-auto space-y-2 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
             <AnimatePresence>
                 {feedbackHistory.map((item) => (
                     <motion.div
                         key={item.id}
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className={`flex flex-col bg-zinc-900/50 p-3 rounded-xl border-l-4 border-y border-r border-y-zinc-800 border-r-zinc-800 ${getColorForMessage(item.message)}`}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex gap-2.5 group"
                     >
-                        <div className="flex justify-between items-center mb-1">
-                            <span className="text-xs font-mono text-zinc-500">{item.timestamp}</span>
-                            <div className="text-zinc-400">{getIconForMessage(item.message)}</div>
+                        <div className={`shrink-0 mt-0.5 ${getAccentColor(item.message)}`}>
+                            {getIconForMessage(item.message)}
                         </div>
-                        <p className="text-sm text-zinc-300 leading-snug">{item.message}</p>
+                        <div className="min-w-0 flex-1">
+                            <p className="text-xs text-zinc-300 leading-snug">{item.message}</p>
+                            <span className="text-[10px] text-zinc-600 font-mono">{item.timestamp}</span>
+                        </div>
                     </motion.div>
                 ))}
             </AnimatePresence>

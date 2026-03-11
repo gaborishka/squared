@@ -12,3 +12,6 @@ coverage/
 !.env.example
 .idea/
 database.sqlite*
+database.legacy.sqlite
+uploads/
+server/storage/uploads/

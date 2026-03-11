@@ -1,5 +1,6 @@
-import { AlertTriangle, Clock3, Shield, Sparkles, X } from 'lucide-react';
-import type { GamePlan, ProjectDetails } from '../types';
+import { AlertTriangle, Clock3, Crosshair, Presentation, Shield, Sparkles, TrendingDown, TrendingUp, X, Zap } from 'lucide-react';
+import { motion } from 'motion/react';
+import type { GamePlan, GamePlanSegment, ProjectDetails } from '../types';
 
 interface GamePlanViewProps {
   project: ProjectDetails;
@@ -9,157 +10,237 @@ interface GamePlanViewProps {
   onStartPresentation: (plan: GamePlan) => void;
 }
 
-const riskTone: Record<string, string> = {
-  safe: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
-  watch: 'border-amber-500/30 bg-amber-500/10 text-amber-100',
-  fragile: 'border-red-500/30 bg-red-500/10 text-red-100',
+const trendIcon = {
+  improving: TrendingUp,
+  stable: Sparkles,
+  declining: TrendingDown,
 };
 
+const trendColor = {
+  improving: 'text-emerald-400',
+  stable: 'text-zinc-400',
+  declining: 'text-red-400',
+};
+
+function riskDot(level: string) {
+  if (level === 'fragile') return 'bg-red-400';
+  if (level === 'watch') return 'bg-amber-400';
+  return 'bg-emerald-400';
+}
+
+function riskBorder(level: string) {
+  if (level === 'fragile') return 'border-red-500/25';
+  if (level === 'watch') return 'border-amber-500/20';
+  return 'border-zinc-800/50';
+}
+
+function policyLabel(policy: string) {
+  if (policy === 'teleprompter') return { text: 'Teleprompter', color: 'text-red-400 bg-red-500/10' };
+  if (policy === 'directive') return { text: 'Directive', color: 'text-amber-400 bg-amber-500/10' };
+  if (policy === 'soft_cue') return { text: 'Soft cue', color: 'text-sky-400 bg-sky-500/10' };
+  return { text: 'Silent', color: 'text-zinc-500 bg-zinc-800/60' };
+}
+
+function hasContent(segment: GamePlanSegment) {
+  return segment.knownIssues.length > 0 || segment.preparedCues.length > 0 || segment.recoveryPhrases.length > 0;
+}
+
 export function GamePlanView({ project, plan, isGenerating, onClose, onStartPresentation }: GamePlanViewProps) {
+  const TrendIcon = plan ? trendIcon[plan.overview.trend] : Sparkles;
+  const prioritySet = new Set(plan?.attentionBudget.prioritySlides ?? []);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm p-4 md:p-10 overflow-y-auto">
-      <div className="max-w-6xl mx-auto rounded-[36px] border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-800">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Game Plan</p>
-            <h3 className="text-2xl font-semibold text-zinc-50 mt-1">{project.name}</h3>
-          </div>
-          <button type="button" onClick={onClose} className="p-2 rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {!plan ? (
-          <div className="p-10 text-center text-zinc-400">
-            <Sparkles className={`w-10 h-10 mx-auto mb-4 text-indigo-400 ${isGenerating ? 'animate-pulse' : ''}`} />
-            <p className="text-lg text-zinc-100 font-medium">Preparing your game plan</p>
-            <p className="mt-2">Aggregating weak spots, recovery phrases, and timing targets from prior rehearsal runs.</p>
-          </div>
-        ) : (
-          <div className="p-6 md:p-8 space-y-6">
-            <div className="grid md:grid-cols-4 gap-4">
-              <div className="rounded-[28px] border border-zinc-800 bg-zinc-900/70 p-5">
-                <div className="flex items-center gap-2 text-sm text-zinc-400">
-                  <Shield className="w-4 h-4 text-emerald-400" />
-                  Runs used
-                </div>
-                <div className="text-3xl font-semibold text-zinc-50 mt-3">{plan.runCount}</div>
-              </div>
-              <div className="rounded-[28px] border border-zinc-800 bg-zinc-900/70 p-5">
-                <div className="flex items-center gap-2 text-sm text-zinc-400">
-                  <Sparkles className="w-4 h-4 text-indigo-400" />
-                  Trend
-                </div>
-                <div className="text-3xl font-semibold text-zinc-50 mt-3 capitalize">{plan.overview.trend}</div>
-              </div>
-              <div className="rounded-[28px] border border-zinc-800 bg-zinc-900/70 p-5">
-                <div className="flex items-center gap-2 text-sm text-zinc-400">
-                  <AlertTriangle className="w-4 h-4 text-amber-400" />
-                  Priority slides
-                </div>
-                <div className="text-3xl font-semibold text-zinc-50 mt-3">
-                  {plan.attentionBudget.prioritySlides.length || '--'}
-                </div>
-              </div>
-              <div className="rounded-[28px] border border-zinc-800 bg-zinc-900/70 p-5">
-                <div className="flex items-center gap-2 text-sm text-zinc-400">
-                  <Clock3 className="w-4 h-4 text-sky-400" />
-                  Time target
-                </div>
-                <div className="text-3xl font-semibold text-zinc-50 mt-3">{plan.timingStrategy.totalTargetMinutes}m</div>
-              </div>
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex flex-col">
+        {/* Header — sticky */}
+        <header className="sticky top-0 z-10 bg-zinc-950/90 backdrop-blur-xl border-b border-zinc-800/50">
+          <div className="max-w-5xl mx-auto flex items-center justify-between px-6 py-4">
+            <div className="min-w-0">
+              <p className="text-[11px] font-medium text-zinc-500 uppercase tracking-widest">Game Plan</p>
+              <h2 className="text-xl font-semibold text-zinc-100 truncate mt-0.5">{project.name}</h2>
             </div>
-
-            <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-5">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-sm text-zinc-400">Attention budget</p>
-                  <h4 className="text-xl font-semibold text-zinc-50 mt-1">
-                    Max {plan.attentionBudget.maxInterventions} interventions, concentrated on slides{' '}
-                    {plan.attentionBudget.prioritySlides.join(', ') || 'with no flagged hotspots'}.
-                  </h4>
-                </div>
-                <div className="rounded-full bg-zinc-950 px-4 py-2 text-sm text-zinc-300">
-                  Avg score {Math.round(plan.overview.avgScore)}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid xl:grid-cols-2 gap-4">
-              {plan.segments.map((segment) => (
-                <article key={segment.slideNumber} className={`rounded-[30px] border p-5 ${riskTone[segment.riskLevel]}`}>
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] opacity-70">Slide {segment.slideNumber}</p>
-                      <h5 className="text-lg font-semibold mt-2">{segment.slideTitle}</h5>
-                    </div>
-                    <div className="rounded-full bg-black/20 px-3 py-1 text-xs uppercase tracking-[0.18em]">
-                      {segment.interventionPolicy}
-                    </div>
-                  </div>
-
-                  <div className="grid sm:grid-cols-2 gap-4 mt-5 text-sm">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] opacity-70">Known issues</p>
-                      <div className="mt-2 space-y-2">
-                        {segment.knownIssues.length > 0 ? (
-                          segment.knownIssues.map((issue) => (
-                            <div key={issue} className="rounded-2xl bg-black/15 px-3 py-2">
-                              {issue}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-2xl bg-black/15 px-3 py-2">No repeated issues on record.</div>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.18em] opacity-70">Prepared cues</p>
-                      <div className="mt-2 space-y-2">
-                        {segment.preparedCues.length > 0 ? (
-                          segment.preparedCues.map((cue) => (
-                            <div key={cue} className="rounded-2xl bg-black/15 px-3 py-2">
-                              {cue}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="rounded-2xl bg-black/15 px-3 py-2">No extra cue needed.</div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {segment.recoveryPhrases.length > 0 && (
-                    <div className="mt-5">
-                      <p className="text-xs uppercase tracking-[0.18em] opacity-70">Recovery phrases</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {segment.recoveryPhrases.map((phrase) => (
-                          <span key={phrase} className="rounded-full bg-black/20 px-3 py-1.5 text-xs">
-                            {phrase}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </article>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-zinc-800">
-          <button onClick={onClose} className="rounded-full px-4 py-2.5 text-sm font-medium text-zinc-300 hover:text-zinc-100">
-            Close
-          </button>
-          {plan && (
             <button
-              onClick={() => onStartPresentation(plan)}
-              className="rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-400 transition-colors"
+              onClick={onClose}
+              className="shrink-0 p-2.5 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
             >
-              Start Presentation with this Plan
+              <X className="w-5 h-5" />
             </button>
+          </div>
+        </header>
+
+        {/* Content */}
+        <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-8">
+          {!plan ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <div className={`w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-6 ${isGenerating ? 'animate-pulse' : ''}`}>
+                <Sparkles className="w-7 h-7 text-indigo-400" />
+              </div>
+              <p className="text-lg font-medium text-zinc-200">Building your game plan</p>
+              <p className="text-sm text-zinc-500 mt-2 max-w-sm">
+                Analyzing weak spots, recovery phrases, and timing from prior rehearsals.
+              </p>
+            </div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
+              className="space-y-8"
+            >
+              {/* Stats row */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 px-4 py-3.5">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                    Rehearsals
+                  </div>
+                  <div className="text-2xl font-bold text-zinc-100 mt-1.5 tabular-nums">{plan.runCount}</div>
+                </div>
+                <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 px-4 py-3.5">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <TrendIcon className={`w-3.5 h-3.5 ${trendColor[plan.overview.trend]}`} />
+                    Trend
+                  </div>
+                  <div className={`text-2xl font-bold mt-1.5 capitalize ${trendColor[plan.overview.trend]}`}>
+                    {plan.overview.trend}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 px-4 py-3.5">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <Crosshair className="w-3.5 h-3.5 text-amber-400" />
+                    Avg score
+                  </div>
+                  <div className="text-2xl font-bold text-zinc-100 mt-1.5 tabular-nums">
+                    {plan.overview.avgScore > 0 ? Math.round(plan.overview.avgScore) : '--'}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 px-4 py-3.5">
+                  <div className="flex items-center gap-2 text-xs text-zinc-500">
+                    <Clock3 className="w-3.5 h-3.5 text-sky-400" />
+                    Target time
+                  </div>
+                  <div className="text-2xl font-bold text-zinc-100 mt-1.5 tabular-nums">{plan.timingStrategy.totalTargetMinutes}m</div>
+                </div>
+              </div>
+
+              {/* Attention budget */}
+              <div className="rounded-xl bg-zinc-900/40 border border-zinc-800/40 px-5 py-4 flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg bg-indigo-500/10 flex items-center justify-center shrink-0">
+                    <Zap className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-zinc-200">
+                      {plan.attentionBudget.maxInterventions} intervention{plan.attentionBudget.maxInterventions !== 1 ? 's' : ''} allowed
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      {plan.attentionBudget.prioritySlides.length > 0
+                        ? `Focus on slide${plan.attentionBudget.prioritySlides.length > 1 ? 's' : ''} ${plan.attentionBudget.prioritySlides.join(', ')}`
+                        : 'No priority hotspots flagged'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Slide segments */}
+              <div>
+                <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-4">
+                  Slide breakdown
+                  <span className="text-zinc-600 ml-2 normal-case tracking-normal">{plan.segments.length} slides</span>
+                </h3>
+
+                <div className="space-y-2">
+                  {plan.segments.map((segment) => {
+                    const policy = policyLabel(segment.interventionPolicy);
+                    const isPriority = prioritySet.has(segment.slideNumber);
+                    const expanded = hasContent(segment);
+                    const timeTarget = plan.timingStrategy.perSlideTargets[segment.slideNumber];
+
+                    return (
+                      <div
+                        key={segment.slideNumber}
+                        className={`rounded-xl border bg-zinc-900/40 transition-colors ${riskBorder(segment.riskLevel)} ${isPriority ? 'ring-1 ring-amber-500/20' : ''}`}
+                      >
+                        {/* Slide header row */}
+                        <div className="flex items-center gap-3 px-4 py-3">
+                          <div className={`w-2 h-2 rounded-full shrink-0 ${riskDot(segment.riskLevel)}`} />
+                          <span className="text-xs font-mono text-zinc-500 shrink-0 w-6 text-right">{segment.slideNumber}</span>
+                          <span className="text-sm font-medium text-zinc-200 truncate flex-1">{segment.slideTitle}</span>
+                          {timeTarget != null && (
+                            <span className="text-[11px] text-zinc-600 tabular-nums shrink-0">{timeTarget}s</span>
+                          )}
+                          <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0 ${policy.color}`}>
+                            {policy.text}
+                          </span>
+                          {isPriority && (
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          )}
+                        </div>
+
+                        {/* Expanded content — only if there's actual data */}
+                        {expanded && (
+                          <div className="px-4 pb-3 pt-0 flex flex-wrap gap-x-6 gap-y-2 border-t border-zinc-800/30 mt-0 pt-3 ml-[44px]">
+                            {segment.knownIssues.length > 0 && (
+                              <div className="min-w-0">
+                                <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Issues</p>
+                                <div className="space-y-1">
+                                  {segment.knownIssues.map((issue) => (
+                                    <p key={issue} className="text-xs text-zinc-400 leading-relaxed">{issue}</p>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {segment.preparedCues.length > 0 && (
+                              <div className="min-w-0">
+                                <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Cues</p>
+                                <div className="space-y-1">
+                                  {segment.preparedCues.map((cue) => (
+                                    <p key={cue} className="text-xs text-zinc-400 leading-relaxed">{cue}</p>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {segment.recoveryPhrases.length > 0 && (
+                              <div className="min-w-0">
+                                <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Recovery</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {segment.recoveryPhrases.map((phrase) => (
+                                    <span key={phrase} className="text-xs text-zinc-400 bg-zinc-800/60 px-2 py-0.5 rounded-md">{phrase}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
           )}
         </div>
+
+        {/* Footer — sticky */}
+        {plan && (
+          <footer className="sticky bottom-0 bg-zinc-950/90 backdrop-blur-xl border-t border-zinc-800/50">
+            <div className="max-w-5xl mx-auto flex items-center justify-end gap-3 px-6 py-4">
+              <button
+                onClick={onClose}
+                className="px-4 py-2.5 rounded-xl text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
+              >
+                Close
+              </button>
+              <button
+                onClick={() => onStartPresentation(plan)}
+                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 text-sm font-semibold text-white hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-600/20 hover:shadow-emerald-600/30"
+              >
+                <Presentation className="w-4 h-4" />
+                Start Presentation
+              </button>
+            </div>
+          </footer>
+        )}
       </div>
     </div>
   );

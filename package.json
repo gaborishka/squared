@@ -9,10 +9,10 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n web,server \"npm:dev:web\" \"npm:dev:server\"",
-    "dev:web": "vite --port=3000 --host=0.0.0.0",
+    "dev:web": "vite --port=5173 --host=0.0.0.0",
     "predev:server": "node scripts/ensure-better-sqlite3-node.mjs",
-    "dev:server": "tsx server/index.ts",
-    "dev:desktop": "concurrently -k -n server,web,electron \"npm:dev:server\" \"npm:dev:web\" \"wait-on tcp:3000 tcp:3001 && npm run electron:dev\"",
+    "dev:server": "SERVER_PORT=3001 tsx server/index.ts",
+    "dev:desktop": "concurrently -k -n server,web,electron \"npm:dev:server\" \"npm:dev:web\" \"wait-on tcp:5173 tcp:3001 && npm run electron:dev\"",
     "build": "npm run build:web && npm run build:server && npm run build:electron",
     "build:desktop": "node scripts/build-desktop.mjs",
     "build:web": "vite build",

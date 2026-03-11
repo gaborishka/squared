@@ -25,7 +25,7 @@ export function getElectronPaths(): ElectronPaths {
       ? path.resolve(appRoot, 'dist-electron/electron/preload.js')
       : path.resolve(electronDistDir, 'preload.js'),
     frontendDistDir: path.resolve(resourcesRoot, 'dist'),
-    devServerUrl: 'http://127.0.0.1:3000',
+    devServerUrl: 'http://127.0.0.1:5173',
     serverEntry: app.isPackaged
       ? path.resolve(appRoot, 'dist-server/server/index.js')
       : path.resolve(resourcesRoot, 'dist-server/server/index.js'),

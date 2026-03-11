@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Clock3, Presentation, Sparkles } from 'lucide-react';
+import { ArrowLeft, Clock3, Mic, Phone, Presentation, Zap } from 'lucide-react';
 import { api } from '../api/client';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import {
@@ -13,7 +13,6 @@ import {
   summarizeSessionMetrics,
 } from '../lib/session';
 import { CameraOverlay } from './CameraOverlay';
-import { Indicators } from './Indicators';
 import { AnalyzingPulse } from './AnalyzingPulse';
 import { DEFAULT_INDICATORS, GamePlan, IndicatorData, IndicatorUpdate, ProjectDetails, indicatorToOverlayState, mergeIndicatorData } from '../types';
 
@@ -22,6 +21,21 @@ interface PresentationModeProps {
   gamePlan: GamePlan;
   onBack: () => void;
   onSessionEnd: () => void;
+}
+
+function agentModeColor(mode: string) {
+  if (mode === 'rescue') return 'text-red-400 bg-red-500/10';
+  if (mode === 'directive') return 'text-amber-400 bg-amber-500/10';
+  if (mode === 'soft_cue') return 'text-sky-400 bg-sky-500/10';
+  return 'text-zinc-500 bg-zinc-800/50';
+}
+
+function formatElapsed(startTime: number | null): string {
+  if (!startTime) return '0:00';
+  const diff = Math.floor((Date.now() - startTime) / 1000);
+  const m = Math.floor(diff / 60);
+  const s = diff % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: PresentationModeProps) {
@@ -45,6 +59,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
 
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState('0:00');
 
   const contextText = useMemo(() => buildPresentationContext(project, gamePlan), [project, gamePlan]);
 
@@ -142,6 +157,15 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
     }
   }, [isConnected, isConnecting]);
 
+  // Elapsed timer
+  useEffect(() => {
+    if (!isConnected || !sessionStartTimeRef.current) return;
+    const tick = () => setElapsed(formatElapsed(sessionStartTimeRef.current));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isConnected]);
+
   useEffect(() => {
     if (window.squaredElectron?.setAppStatus) {
       if (isConnected) {
@@ -204,133 +228,227 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
     ? gamePlan.segments.find((segment) => segment.slideNumber === indicators.currentSlide)
     : null;
 
+  const fillerCount = indicators?.fillerWords?.total ?? 0;
+  const prioritySlides = gamePlan.attentionBudget.prioritySlides;
+  const data = indicators ?? DEFAULT_INDICATORS;
+
   return (
-    <div className="h-screen flex flex-col">
-      <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/70 backdrop-blur-md">
-        <button onClick={onBack} className="flex items-center text-zinc-400 hover:text-white transition-colors">
-          <ArrowLeft className="w-5 h-5 mr-2" /> Back
+    <div className="h-screen flex flex-col bg-zinc-950">
+      {/* Header */}
+      <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60 shrink-0">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back</span>
         </button>
-        <div className="text-center">
-          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Presentation</p>
-          <h1 className="text-lg font-semibold text-zinc-100">{project.name}</h1>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-zinc-300 font-medium">{project.name}</span>
+          <span className="text-zinc-700">·</span>
+          <span className="text-xs uppercase tracking-wider text-zinc-600">Presentation</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`} />
-          <span className="text-sm font-medium text-zinc-300">
-            {isConnecting ? 'Connecting...' : isConnected ? 'Silent coach active' : 'Ready'}
+          <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
+          <span className="text-xs text-zinc-500">
+            {isConnecting ? 'Connecting' : isConnected ? 'Live' : 'Ready'}
           </span>
         </div>
       </header>
 
-      <main className="flex-1 flex p-6 gap-6 min-h-0">
-        <section className="flex-1 relative rounded-[32px] overflow-hidden border border-zinc-800 bg-zinc-900 flex flex-col">
+      <main className="flex-1 flex gap-0 min-h-0">
+        {/* Video area */}
+        <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           {indicators && <CameraOverlay data={indicators} variant="presentation" />}
 
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center space-x-4 bg-zinc-950/80 backdrop-blur-md px-6 py-3 rounded-full border border-zinc-800 z-10">
+          {/* Control bar */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
+            {isConnected && (
+              <div className="flex items-center gap-1.5 px-3 text-xs text-zinc-400 tabular-nums">
+                <Clock3 className="w-3 h-3" />
+                {elapsed}
+              </div>
+            )}
             <button
               onClick={handleToggleConnect}
-              className={`flex items-center px-4 py-2 rounded-full font-medium transition-colors ${
+              className={`h-10 px-5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${
                 isConnected || isConnecting
-                  ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
-                  : 'bg-emerald-500 text-white hover:bg-emerald-400'
+                  ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
+                  : 'bg-emerald-600 text-white hover:bg-emerald-500'
               }`}
             >
-              {isConnected || isConnecting ? 'End Presentation' : 'Start Presentation'}
+              {isConnected || isConnecting ? (
+                <>
+                  <Phone className="w-3.5 h-3.5 rotate-[135deg]" />
+                  End
+                </>
+              ) : (
+                <>
+                  <Presentation className="w-3.5 h-3.5" />
+                  Start
+                </>
+              )}
             </button>
           </div>
 
           {error && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-md z-10">
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-xl text-sm backdrop-blur-md z-10">
               {error}
             </div>
           )}
         </section>
 
-        <aside className="w-[380px] shrink-0 flex flex-col gap-6">
-          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Live plan</p>
-                <h2 className="text-2xl font-semibold text-zinc-50 mt-2">Execution guardrails</h2>
-              </div>
-              <span className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-300">
-                {gamePlan.attentionBudget.maxInterventions} max cues
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mt-5">
-              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Trend</div>
-                <div className="text-2xl font-semibold text-zinc-100 mt-2 capitalize">{gamePlan.overview.trend}</div>
-              </div>
-              <div className="rounded-[22px] border border-zinc-800 bg-zinc-950/60 px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Avg score</div>
-                <div className="text-2xl font-semibold text-zinc-100 mt-2">{Math.round(gamePlan.overview.avgScore)}</div>
-              </div>
-            </div>
-
-            <div className="mt-5 rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4">
-              <div className="flex items-center gap-2 text-zinc-100 font-medium">
-                <Sparkles className="w-4 h-4 text-emerald-400" />
-                Priority slides
-              </div>
-              <p className="mt-2 text-sm text-zinc-400">
-                {gamePlan.attentionBudget.prioritySlides.length > 0
-                  ? gamePlan.attentionBudget.prioritySlides.join(', ')
-                  : 'No high-risk slides identified.'}
-              </p>
-            </div>
-
-            {currentSegment && (
-              <div className="mt-5 rounded-[24px] border border-emerald-500/20 bg-emerald-500/10 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.18em] text-emerald-100/70">Current slide</p>
-                    <h3 className="text-lg font-semibold text-emerald-50 mt-1">
-                      {currentSegment.slideNumber}. {currentSegment.slideTitle}
-                    </h3>
-                  </div>
-                  <span className="rounded-full bg-black/15 px-3 py-1 text-xs uppercase tracking-[0.18em] text-emerald-50/80">
-                    {currentSegment.interventionPolicy}
+        {/* Right panel */}
+        <aside className="w-[280px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
+          {isConnected ? (
+            /* ──── Live session panel ──── */
+            <>
+              {/* Current slide context */}
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600">Current slide</p>
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded capitalize ${agentModeColor(data.agentMode)}`}>
+                    {data.agentMode}
                   </span>
                 </div>
-                <p className="text-sm text-emerald-50/90 mt-3">
-                  {currentSegment.knownIssues[0] || 'No recurring issue logged for this slide.'}
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/70 p-6 flex-1 min-h-0">
-            <h3 className="text-lg font-semibold mb-4 flex items-center">
-              <Presentation className="w-5 h-5 mr-2 text-emerald-400" />
-              Live HUD state
-            </h3>
-            {isConnected ? (
-              <Indicators data={indicators ?? DEFAULT_INDICATORS} />
-            ) : isConnecting ? (
-              <div className="flex h-full items-center justify-center">
-                <AnalyzingPulse />
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-400">
-                  The presentation prompt is preloaded with project structure, risk map, prepared cues, recovery phrases, and per-slide time targets.
+                <div className="mt-1.5 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold text-zinc-100 tabular-nums">{data.currentSlide ?? '—'}</span>
+                  {currentSegment && (
+                    <span className="text-sm text-zinc-400 truncate">{currentSegment.slideTitle}</span>
+                  )}
                 </div>
-                <div className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4 text-sm text-zinc-300">
-                  <div className="flex items-center gap-2 font-medium text-zinc-100">
-                    <Clock3 className="w-4 h-4 text-sky-400" />
-                    Target runtime
+                {data.slideTimeRemaining != null && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-700 ${data.slideTimeRemaining < 15 ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                        style={{ width: `${Math.max(5, Math.min(100, (data.slideTimeRemaining / 90) * 100))}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-zinc-500 tabular-nums">{Math.max(0, data.slideTimeRemaining)}s</span>
                   </div>
-                  <p className="mt-2 text-zinc-400">
-                    Aim for {gamePlan.timingStrategy.totalTargetMinutes} minutes total.
-                    {sessionStartTime ? ` Last presentation started at ${new Date(sessionStartTime).toLocaleTimeString()}.` : ''}
+                )}
+              </div>
+
+              {/* Live cue */}
+              {(data.microPrompt || data.rescueText) && (
+                <div className="px-4 py-3 border-b border-zinc-800/40">
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Live cue</p>
+                  {data.microPrompt && (
+                    <p className="text-sm font-semibold text-zinc-200">{data.microPrompt}</p>
+                  )}
+                  {data.rescueText && (
+                    <p className="text-xs text-indigo-300 mt-1 leading-relaxed bg-indigo-500/10 rounded-lg px-2.5 py-2">{data.rescueText}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Quick metrics */}
+              <div className="px-4 py-3 border-b border-zinc-800/40 grid grid-cols-3 gap-2">
+                <div>
+                  <p className="text-[10px] text-zinc-600">Score</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{data.overallScore > 0 ? data.overallScore : '—'}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-600">Fillers</p>
+                  <p className={`text-lg font-bold tabular-nums ${fillerCount > 3 ? 'text-amber-400' : 'text-zinc-200'}`}>{fillerCount}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-600">Confidence</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{data.confidenceScore > 0 ? data.confidenceScore : '—'}</p>
+                </div>
+              </div>
+
+              {/* Current segment details */}
+              {currentSegment && currentSegment.knownIssues.length > 0 && (
+                <div className="px-4 py-3 border-b border-zinc-800/40">
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Watch for</p>
+                  {currentSegment.knownIssues.map((issue) => (
+                    <p key={issue} className="text-xs text-amber-300/80 leading-relaxed">{issue}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* Latest feedback */}
+              {data.feedbackMessage && (
+                <div className="px-4 py-3 border-b border-zinc-800/40">
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Feedback</p>
+                  <p className="text-xs text-zinc-300 leading-relaxed">{data.feedbackMessage}</p>
+                </div>
+              )}
+
+              {/* Plan summary — bottom */}
+              <div className="mt-auto px-4 py-3 border-t border-zinc-800/40 bg-zinc-950/30">
+                <div className="flex items-center justify-between text-[10px] text-zinc-600">
+                  <span>{gamePlan.attentionBudget.maxInterventions} max cues</span>
+                  <span>{gamePlan.timingStrategy.totalTargetMinutes}m target</span>
+                </div>
+                {prioritySlides.length > 0 && (
+                  <p className="text-[10px] text-amber-400/60 mt-1">
+                    Priority: slide{prioritySlides.length > 1 ? 's' : ''} {prioritySlides.join(', ')}
+                  </p>
+                )}
+              </div>
+            </>
+          ) : isConnecting ? (
+            /* ──── Connecting state ──── */
+            <div className="flex-1 flex items-center justify-center">
+              <AnalyzingPulse />
+            </div>
+          ) : (
+            /* ──── Pre-session state ──── */
+            <>
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600">Game plan</p>
+                <p className="text-sm font-medium text-zinc-300 mt-1">{project.name}</p>
+              </div>
+
+              <div className="px-4 py-3 border-b border-zinc-800/40 grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[10px] text-zinc-600">Rehearsals</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{gamePlan.runCount}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-600">Avg score</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{gamePlan.overview.avgScore > 0 ? Math.round(gamePlan.overview.avgScore) : '—'}</p>
+                </div>
+              </div>
+
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <div className="flex items-center gap-2 mb-2">
+                  <Zap className="w-3.5 h-3.5 text-indigo-400" />
+                  <p className="text-xs font-medium text-zinc-300">
+                    {gamePlan.attentionBudget.maxInterventions} intervention{gamePlan.attentionBudget.maxInterventions !== 1 ? 's' : ''} allowed
                   </p>
                 </div>
+                <p className="text-xs text-zinc-500">
+                  {prioritySlides.length > 0
+                    ? `Focus slides: ${prioritySlides.join(', ')}`
+                    : 'No priority hotspots'}
+                </p>
               </div>
-            )}
-          </div>
+
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <div className="flex items-center gap-2 mb-2">
+                  <Clock3 className="w-3.5 h-3.5 text-sky-400" />
+                  <p className="text-xs font-medium text-zinc-300">
+                    Target: {gamePlan.timingStrategy.totalTargetMinutes}m total
+                  </p>
+                </div>
+                <p className="text-xs text-zinc-500">{project.slideCount} slides</p>
+              </div>
+
+              <div className="flex-1 flex flex-col justify-end px-4 py-4">
+                <div className="flex items-start gap-2.5 rounded-xl bg-zinc-950/40 px-3.5 py-3">
+                  <Mic className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-xs text-zinc-300 font-medium">Silent coach ready</p>
+                    <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
+                      AI will monitor silently and show cues on the HUD overlay. No audio interruptions.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </aside>
       </main>
     </div>

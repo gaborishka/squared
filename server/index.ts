@@ -44,7 +44,7 @@ app.use((error: Error, _req: express.Request, res: express.Response, _next: expr
 const currentFilePath = fileURLToPath(import.meta.url);
 
 if (process.argv[1] === currentFilePath) {
-  const port = Number(process.env.PORT || 3001);
+  const port = Number(process.env.SERVER_PORT || process.env.PORT || 3001);
   app.listen(port, () => {
     console.log(`Squared API server listening on http://localhost:${port}`);
   });

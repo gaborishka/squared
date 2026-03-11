@@ -16,7 +16,7 @@ import {
   Target,
   History,
 } from 'lucide-react';
-import squaredLogo from '../../logo-squared-v5.svg';
+import squaredLogo from '../../squared-cropped.png';
 import { api } from '../api/client';
 import type { GamePlan, ProjectAnalysis, ProjectDetails, RunDetails, RunSummary } from '../types';
 import { usePdfThumbnails } from '../hooks/usePdfThumbnails';
@@ -196,8 +196,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
         {/* ──── Header ──── */}
         <header className="relative z-50 flex items-center justify-between px-6 lg:px-10 py-4 border-b border-zinc-800/40 bg-zinc-950/80 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-3">
-            <img src={squaredLogo} alt="Squared" className="h-8 w-auto" />
-            <span className="text-base font-semibold text-zinc-300 hidden sm:block tracking-tight">Squared</span>
+            <img src={squaredLogo} alt="Squared" style={{ height: '100px' }} />
           </div>
 
           <div className="flex items-center gap-3">
