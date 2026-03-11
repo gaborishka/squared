@@ -15,3 +15,7 @@ database.sqlite*
 database.legacy.sqlite
 uploads/
 server/storage/uploads/
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl

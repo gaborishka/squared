@@ -16,6 +16,21 @@ Squared — an AI-powered real-time speech coaching app built for Google AI Stud
 
 No test framework is configured. No ESLint or Prettier.
 
+## Deployment (GCP Cloud Run)
+
+**Prerequisites:** gcloud CLI, Terraform >= 1.5, Docker
+
+**Quick deploy:**
+```bash
+./scripts/deploy.sh --project=YOUR_GCP_PROJECT
+```
+
+The script reads `GEMINI_API_KEY` from `.env` or `.env.local`, builds a Docker image, pushes to Artifact Registry, and deploys via Terraform to Cloud Run.
+
+**Infrastructure:** Terraform IaC in `infra/` — manages Artifact Registry, Cloud Run service, and IAM. SQLite is ephemeral on Cloud Run (data resets on container restart).
+
+**Current deployment:** https://squared-j2gx3ygtta-uc.a.run.app (project: `agile-stratum-486012-v3`, region: `us-central1`)
+
 ## Environment Variables
 
 Copy `.env.example` to `.env.local`. Required: `GEMINI_API_KEY`. Optional: `APP_URL`, `DISABLE_HMR` (used in AI Studio deployments).
