@@ -142,9 +142,47 @@ export interface RunSummary {
   createdAt: string;
 }
 
+export interface RunReportComparison {
+  overallScoreDelta: number | null;
+  avgPaceWpmDelta: number | null;
+  avgConfidenceDelta: number | null;
+  fillerWordCountDelta: number | null;
+  eyeContactPctDelta: number | null;
+  postureGoodPctDelta: number | null;
+}
+
+export interface RunReportHighlight {
+  timestamp: string;
+  slideNumber: number | null;
+  type: 'win' | 'risk' | 'recovery';
+  severity: FeedbackSeverity;
+  message: string;
+}
+
+export interface RunReportSlideCard {
+  slideNumber: number;
+  slideTitle: string;
+  riskLevel: RiskLevel;
+  issues: string[];
+  bestPhrase: string;
+  repeatedFromHistory: boolean;
+}
+
+export interface RunReport {
+  verdict: 'strong' | 'mixed' | 'needs_work';
+  summary: string;
+  wins: string[];
+  risks: string[];
+  nextSteps: string[];
+  highlights: RunReportHighlight[];
+  slideCards: RunReportSlideCard[];
+  comparison: RunReportComparison | null;
+}
+
 export interface RunDetails extends RunSummary {
   feedbacks: RunFeedback[];
   slideAnalyses: RunSlideAnalysis[];
+  runReport: RunReport | null;
 }
 
 export interface SaveRunPayload {

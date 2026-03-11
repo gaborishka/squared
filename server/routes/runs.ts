@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { SaveRunPayload } from '../../shared/types.js';
 import { getRun, listRuns, saveRun } from '../db/queries.js';
+import { attachRunReport } from '../services/runReport.js';
 
 export const runsRouter = Router();
 
@@ -11,7 +12,7 @@ runsRouter.post('/', (req, res) => {
     return;
   }
 
-  res.status(201).json(saveRun(payload));
+  res.status(201).json(attachRunReport(saveRun(payload)));
 });
 
 runsRouter.get('/', (req, res) => {
@@ -25,5 +26,5 @@ runsRouter.get('/:id', (req, res) => {
     res.status(404).json({ error: 'Run not found.' });
     return;
   }
-  res.json(run);
+  res.json(attachRunReport(run));
 });

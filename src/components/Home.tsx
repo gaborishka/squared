@@ -180,7 +180,17 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
   };
 
   const comparisonRun = selectedRun
-    ? projectRuns.find((run) => run.id !== selectedRun.id && run.mode === selectedRun.mode)
+    ? (() => {
+      const currentIndex = projectRuns.findIndex((run) => run.id === selectedRun.id);
+      if (currentIndex === -1) return null;
+
+      for (let index = currentIndex + 1; index < projectRuns.length; index += 1) {
+        const candidate = projectRuns[index];
+        if (candidate?.mode === selectedRun.mode) return candidate;
+      }
+
+      return null;
+    })()
     : null;
 
   const lastRunDate = projectRuns[0]
@@ -722,6 +732,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
         <RunAnalysis
           run={selectedRun}
           comparisonRun={comparisonRun}
+          project={selectedProject}
           onClose={() => setSelectedRun(null)}
         />
       )}

@@ -448,6 +448,7 @@ export function getRun(id: string): RunDetails | null {
     ...mapRunSummary(row),
     feedbacks: (getRunFeedbacksStmt.all(id) as FeedbackRow[]).map(mapFeedback),
     slideAnalyses: (getRunSlideAnalysesStmt.all(id) as SlideAnalysisRow[]).map(mapRunSlideAnalysis),
+    runReport: null,
   };
 }
 
