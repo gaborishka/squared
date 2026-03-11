@@ -21,6 +21,19 @@ projectsRouter.get('/', (_req, res) => {
   res.json(listProjects());
 });
 
+projectsRouter.get('/:id/file', (req, res) => {
+  const project = getProject(String(req.params.id));
+  if (!project?.filePath) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
+  res.sendFile(project.filePath, (err) => {
+    if (err && !res.headersSent) {
+      res.status(404).json({ error: 'File not found on disk.' });
+    }
+  });
+});
+
 projectsRouter.get('/:id', (req, res) => {
   const projectId = String(req.params.id);
   const project = getProject(projectId);

@@ -15,7 +15,7 @@ function getApiBaseUrl(): string {
   if (envBase) return envBase;
   if (typeof window === 'undefined') return 'http://127.0.0.1:3001';
   if (window.location.protocol === 'file:') return 'http://127.0.0.1:3001';
-  if (window.location.port === '3000') return 'http://127.0.0.1:3001';
+  if (window.location.port === '3000' || window.location.port === '5173') return 'http://127.0.0.1:3001';
   return '';
 }
 
@@ -78,4 +78,5 @@ export const api = {
   getLatestGamePlan: (projectId: string) =>
     requestJson<GamePlan>(`/api/projects/${projectId}/gameplan/latest`),
   getGamePlan: (id: string) => requestJson<GamePlan>(`/api/gameplans/${id}`),
+  getProjectFileUrl: (id: string) => `${API_BASE_URL}/api/projects/${id}/file`,
 };

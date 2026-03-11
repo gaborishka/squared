@@ -1,10 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Clock3, FilePenLine, LoaderCircle, Mic, Plus, Presentation, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'motion/react';
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  FilePenLine,
+  Layers,
+  LoaderCircle,
+  Mic,
+  Plus,
+  Presentation,
+  Trash2,
+  TrendingUp,
+  Target,
+  History,
+} from 'lucide-react';
 import squaredLogo from '../../logo-squared-v5.svg';
 import { api } from '../api/client';
 import type { GamePlan, ProjectAnalysis, ProjectDetails, RunDetails, RunSummary } from '../types';
+import { usePdfThumbnails } from '../hooks/usePdfThumbnails';
 import { GamePlanView } from './GamePlanView';
-import { ProjectList } from './ProjectList';
 import { ProjectSetup } from './ProjectSetup';
 import { RunAnalysis } from './RunAnalysis';
 
@@ -13,6 +29,8 @@ interface HomeProps {
   onStartRehearsal: (project: ProjectDetails) => void;
   onStartPresentation: (project: ProjectDetails, gamePlan: GamePlan) => void;
 }
+
+type DetailsTab = 'deck' | 'plan' | 'sessions';
 
 export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: HomeProps) {
   const [projects, setProjects] = useState<ProjectDetails[]>([]);
@@ -27,10 +45,19 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
   const [isLoading, setIsLoading] = useState(true);
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<DetailsTab>('deck');
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
+  );
+
+  const { thumbnails: pdfThumbnails, loading: pdfLoading } = usePdfThumbnails(
+    selectedProjectId,
+    selectedProject?.fileType ?? null,
   );
 
   const loadProjects = useCallback(async () => {
@@ -83,6 +110,21 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
     void loadSelectedProjectData(selectedProjectId);
   }, [selectedProjectId, loadSelectedProjectData]);
 
+  useEffect(() => {
+    setDeleteConfirm(false);
+  }, [selectedProjectId]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
   const handleSavedProject = async (project: ProjectDetails) => {
     setProjects((current) => {
       const next = current.filter((item) => item.id !== project.id);
@@ -101,6 +143,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
       setProjectRuns([]);
       setProjectAnalysis(null);
       setLatestGamePlan(null);
+      setDeleteConfirm(false);
     } catch (deleteError) {
       console.error(deleteError);
       setError('Could not delete the project.');
@@ -143,280 +186,520 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
     ? projectRuns.find((run) => run.id !== selectedRun.id && run.mode === selectedRun.mode)
     : null;
 
+  const lastRunDate = projectRuns[0]
+    ? new Date(projectRuns[0].createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+
   return (
     <>
-      <div className="max-w-[1500px] mx-auto px-4 md:px-6 py-6 md:py-8">
-        <div className="rounded-[40px] border border-zinc-800 bg-zinc-950/70 p-6 md:p-8 shadow-[0_32px_120px_rgba(0,0,0,0.45)]">
-          <div className="flex flex-col xl:flex-row gap-6">
-            <ProjectList
-              projects={projects}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={setSelectedProjectId}
-              onCreateProject={() => {
+      <div className="h-screen flex flex-col overflow-hidden bg-zinc-950">
+        {/* ──── Header ──── */}
+        <header className="relative z-50 flex items-center justify-between px-6 lg:px-10 py-4 border-b border-zinc-800/40 bg-zinc-950/80 backdrop-blur-md shrink-0">
+          <div className="flex items-center gap-3">
+            <img src={squaredLogo} alt="Squared" className="h-8 w-auto" />
+            <span className="text-base font-semibold text-zinc-300 hidden sm:block tracking-tight">Squared</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Project Switcher */}
+            {projects.length > 0 && (
+              <div ref={dropdownRef} className="relative">
+                <button
+                  onClick={() => setDropdownOpen(!dropdownOpen)}
+                  className="inline-flex items-center gap-2.5 rounded-xl border border-zinc-700/60 bg-zinc-900/80 px-4 py-2.5 text-[15px] text-zinc-100 hover:border-zinc-600 transition-all duration-200"
+                >
+                  <span className="max-w-[240px] truncate font-medium">{selectedProject?.name ?? 'Select project'}</span>
+                  <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${dropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {dropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -4, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.15, ease: 'easeOut' }}
+                    className="absolute right-0 top-full mt-2 w-80 rounded-2xl border border-zinc-700/50 bg-zinc-900/95 backdrop-blur-xl shadow-2xl shadow-black/50 z-50 py-2 max-h-[420px] overflow-y-auto"
+                  >
+                    <div className="px-4 py-2 border-b border-zinc-800/50 mb-1">
+                      <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Projects</p>
+                    </div>
+                    {projects.map((project) => (
+                      <button
+                        key={project.id}
+                        onClick={() => {
+                          setSelectedProjectId(project.id);
+                          setDropdownOpen(false);
+                        }}
+                        className={`w-full px-4 py-3.5 text-left transition-all duration-150 flex items-center justify-between gap-3 ${
+                          project.id === selectedProjectId
+                            ? 'bg-indigo-500/12 border-l-2 border-indigo-400'
+                            : 'text-zinc-300 hover:bg-zinc-800/60 border-l-2 border-transparent'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className={`text-[15px] font-medium truncate ${project.id === selectedProjectId ? 'text-indigo-200' : 'text-zinc-200'}`}>
+                            {project.name}
+                          </div>
+                          <div className="text-sm text-zinc-400 mt-0.5">
+                            {project.slideCount} slides
+                            {project.updatedAt && (
+                              <span className="ml-2 text-zinc-500">
+                                {new Date(project.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {project.id === selectedProjectId && (
+                          <div className="w-2 h-2 rounded-full bg-indigo-400 shrink-0 animate-pulse" />
+                        )}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={() => {
                 setSetupProject(null);
                 setSetupOpen(true);
               }}
-            />
+              className="inline-flex items-center gap-2 rounded-xl bg-zinc-800/80 border border-zinc-700/40 px-4 py-2.5 text-[15px] text-zinc-200 hover:bg-zinc-700/80 hover:border-zinc-600/60 transition-all duration-200"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">New</span>
+            </button>
+          </div>
+        </header>
 
-            <section className="flex-1 min-w-0 space-y-6">
-              <div className="rounded-[32px] border border-zinc-800 bg-gradient-to-br from-zinc-900 via-zinc-950 to-zinc-900 p-6 md:p-8">
-                <img src={squaredLogo} alt="Squared logo" className="h-14 w-auto mb-5" />
-                <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
-                  <div className="max-w-3xl">
-                    <p className="text-xs uppercase tracking-[0.28em] text-zinc-500">Squared v2</p>
-                    <h1 className="text-4xl md:text-5xl font-semibold tracking-tight text-zinc-50 mt-2">
-                      Project-centric rehearsal and presentation coaching.
-                    </h1>
-                    <p className="text-lg text-zinc-400 mt-4">
-                      Upload the deck, rehearse against the real structure, and carry forward risk-aware cues into presentation mode.
-                    </p>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3 min-w-[280px]">
-                    <button
-                      onClick={() => {
-                        setSetupProject(null);
-                        setSetupOpen(true);
-                      }}
-                      className="rounded-[24px] border border-zinc-800 bg-zinc-900 px-5 py-4 text-left hover:border-zinc-700 transition-colors"
-                    >
-                      <Plus className="w-5 h-5 text-indigo-400" />
-                      <p className="text-base font-semibold text-zinc-100 mt-3">New project</p>
-                      <p className="text-sm text-zinc-400 mt-1">Create a deck, upload slides, and add speaker notes.</p>
-                    </button>
-                    <button
-                      onClick={handlePreparePresentation}
-                      disabled={!selectedProject}
-                      className="rounded-[24px] border border-zinc-800 bg-zinc-900 px-5 py-4 text-left hover:border-zinc-700 transition-colors disabled:opacity-50"
-                    >
-                      <Sparkles className="w-5 h-5 text-emerald-400" />
-                      <p className="text-base font-semibold text-zinc-100 mt-3">Prepare game plan</p>
-                      <p className="text-sm text-zinc-400 mt-1">Generate risk-aware cues from rehearsal history.</p>
-                    </button>
-                  </div>
-                </div>
+        {/* ──── Main Content ──── */}
+        <main className="flex-1 min-h-0 overflow-y-auto relative">
+          {/* Ambient glow */}
+          <div className="pointer-events-none fixed top-[8%] left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-indigo-500/[0.03] rounded-full blur-[160px]" />
+          <div className="pointer-events-none fixed top-[25%] left-[30%] w-[400px] h-[400px] bg-emerald-500/[0.02] rounded-full blur-[120px]" />
+
+          <div className="max-w-6xl mx-auto px-6 lg:px-10 py-8 lg:py-12 relative z-10">
+            {/* Error Banner */}
+            {error && (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-3.5 text-sm text-red-300 flex items-center gap-3 mb-8">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <span className="flex-1">{error}</span>
+                <button onClick={() => setError(null)} className="text-red-400 hover:text-red-300 text-sm font-medium">dismiss</button>
               </div>
+            )}
 
-              {error && (
-                <div className="rounded-[28px] border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-200 flex items-center gap-3">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  {error}
+            {isLoading ? (
+              /* ──── Loading ──── */
+              <div className="text-center py-32">
+                <LoaderCircle className="w-8 h-8 animate-spin mx-auto text-zinc-500" />
+                <p className="text-base text-zinc-500 mt-4">Loading projects...</p>
+              </div>
+            ) : !selectedProject ? (
+              /* ──── Empty State ──── */
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
+                className="text-center py-24 max-w-lg mx-auto"
+              >
+                <div className="inline-flex items-center justify-center w-24 h-24 rounded-3xl bg-gradient-to-b from-zinc-800/80 to-zinc-900 border border-zinc-700/50 mb-10 shadow-xl shadow-indigo-500/5">
+                  <Mic className="w-10 h-10 text-indigo-400" />
                 </div>
-              )}
+                <h1 className="text-4xl lg:text-5xl font-bold text-zinc-50 tracking-tight">Welcome to Squared</h1>
+                <p className="text-lg text-zinc-400 mt-4 leading-relaxed">
+                  Upload your deck and start rehearsing with AI-powered speech coaching.
+                </p>
+                <button
+                  onClick={() => {
+                    setSetupProject(null);
+                    setSetupOpen(true);
+                  }}
+                  className="mt-12 inline-flex items-center gap-2.5 rounded-2xl bg-indigo-500 px-8 py-4 text-lg font-semibold text-white hover:bg-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/35 hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <Plus className="w-5 h-5" />
+                  Create your first project
+                </button>
+              </motion.div>
+            ) : (
+              /* ──── Active Project — Two Column Layout ──── */
+              <motion.div
+                key={selectedProjectId}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+              >
+                <div className="lg:grid lg:grid-cols-[380px_1fr] lg:gap-12 space-y-8 lg:space-y-0 items-start">
 
-              {isLoading ? (
-                <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-10 text-center text-zinc-400">
-                  <LoaderCircle className="w-8 h-8 animate-spin mx-auto mb-4 text-indigo-400" />
-                  Loading project workspace…
-                </div>
-              ) : !selectedProject ? (
-                <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-10 text-center text-zinc-400">
-                  Select a project on the left or create a new one to start rehearsing.
-                </div>
-              ) : (
-                <>
-                  <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-6 md:p-8">
-                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
-                      <div className="max-w-3xl">
-                        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Active project</p>
-                        <h2 className="text-3xl font-semibold text-zinc-50 mt-2">{selectedProject.name}</h2>
-                        <p className="text-zinc-400 mt-3 text-base whitespace-pre-wrap">
-                          {selectedProject.description || 'No project description yet.'}
+                  {/* ──── LEFT COLUMN: Project Hero ──── */}
+                  <div className="lg:sticky lg:top-12 space-y-8">
+                    {/* Project Name */}
+                    <div>
+                      <h1 className="text-4xl lg:text-5xl font-bold tracking-tight bg-gradient-to-b from-white via-zinc-200 to-zinc-500 bg-clip-text text-transparent leading-[1.1]">
+                        {selectedProject.name}
+                      </h1>
+                      {lastRunDate && (
+                        <p className="text-sm text-zinc-500 mt-3 flex items-center gap-1.5">
+                          <Clock3 className="w-3.5 h-3.5" />
+                          Last session {lastRunDate}
                         </p>
+                      )}
+                    </div>
+
+                    {/* Stats Cards */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 p-4 group hover:border-zinc-700/50 transition-colors">
+                        <Layers className="w-5 h-5 text-indigo-400 mb-2" />
+                        <div className="text-2xl font-bold text-zinc-100 tabular-nums">{selectedProject.slideCount}</div>
+                        <div className="text-xs text-zinc-500 mt-0.5">slides</div>
                       </div>
-                      <div className="flex flex-wrap gap-3">
+                      <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 p-4 group hover:border-zinc-700/50 transition-colors">
+                        <TrendingUp className="w-5 h-5 text-emerald-400 mb-2" />
+                        <div className="text-2xl font-bold text-zinc-100 tabular-nums">{Math.round(projectAnalysis?.avgScore ?? 0)}</div>
+                        <div className="text-xs text-zinc-500 mt-0.5">avg score</div>
+                      </div>
+                      <div className="rounded-xl bg-zinc-900/60 border border-zinc-800/50 p-4 group hover:border-zinc-700/50 transition-colors">
+                        <History className="w-5 h-5 text-amber-400 mb-2" />
+                        <div className="text-2xl font-bold text-zinc-100 tabular-nums">{projectRuns.length}</div>
+                        <div className="text-xs text-zinc-500 mt-0.5">sessions</div>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="space-y-3">
+                      <button
+                        onClick={() => onStartRehearsal(selectedProject)}
+                        className="w-full group flex items-center justify-center gap-3 rounded-2xl bg-indigo-500 px-6 py-4 text-lg font-semibold text-white hover:bg-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/20 hover:shadow-xl hover:shadow-indigo-500/30 hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        <Mic className="w-5 h-5" />
+                        Rehearse
+                      </button>
+                      <button
+                        onClick={handlePreparePresentation}
+                        className="w-full group flex items-center justify-center gap-3 rounded-2xl bg-emerald-600 px-6 py-4 text-lg font-semibold text-white hover:bg-emerald-500 transition-all duration-200 shadow-lg shadow-emerald-600/20 hover:shadow-xl hover:shadow-emerald-600/30 hover:scale-[1.02] active:scale-[0.98]"
+                      >
+                        <Presentation className="w-5 h-5" />
+                        Present
+                      </button>
+                    </div>
+
+                    {/* Secondary Actions */}
+                    <div className="flex items-center gap-1 pt-2 border-t border-zinc-800/30">
+                      <button
+                        onClick={() => {
+                          setSetupProject(selectedProject);
+                          setSetupOpen(true);
+                        }}
+                        className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300 transition-colors px-3 py-2 rounded-lg hover:bg-zinc-800/40"
+                      >
+                        <FilePenLine className="w-4 h-4" />
+                        Edit project
+                      </button>
+                      {!deleteConfirm ? (
                         <button
-                          onClick={() => onStartRehearsal(selectedProject)}
-                          className="inline-flex items-center gap-2 rounded-full bg-indigo-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-400 transition-colors"
+                          onClick={() => setDeleteConfirm(true)}
+                          className="flex items-center gap-2 text-sm text-zinc-500 hover:text-red-400 transition-colors px-3 py-2 rounded-lg hover:bg-red-500/5"
                         >
-                          <Mic className="w-4 h-4" />
-                          Rehearse
-                        </button>
-                        <button
-                          onClick={handlePreparePresentation}
-                          className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-400 transition-colors"
-                        >
-                          <Presentation className="w-4 h-4" />
-                          Present
-                        </button>
-                        <button
-                          onClick={() => {
-                            setSetupProject(selectedProject);
-                            setSetupOpen(true);
-                          }}
-                          className="inline-flex items-center gap-2 rounded-full border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 hover:border-zinc-600"
-                        >
-                          <FilePenLine className="w-4 h-4" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={handleDeleteProject}
-                          className="inline-flex items-center gap-2 rounded-full border border-red-500/30 px-5 py-2.5 text-sm font-medium text-red-200 hover:bg-red-500/10"
-                        >
+                          <Trash2 className="w-4 h-4" />
                           Delete
                         </button>
-                      </div>
-                    </div>
-
-                    <div className="grid md:grid-cols-4 gap-4 mt-8">
-                      <div className="rounded-[24px] bg-zinc-950/70 border border-zinc-800 px-5 py-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Slides</p>
-                        <div className="text-3xl font-semibold text-zinc-50 mt-3">{selectedProject.slideCount}</div>
-                      </div>
-                      <div className="rounded-[24px] bg-zinc-950/70 border border-zinc-800 px-5 py-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Rehearsals</p>
-                        <div className="text-3xl font-semibold text-zinc-50 mt-3">{projectAnalysis?.rehearsalRuns ?? 0}</div>
-                      </div>
-                      <div className="rounded-[24px] bg-zinc-950/70 border border-zinc-800 px-5 py-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Avg score</p>
-                        <div className="text-3xl font-semibold text-zinc-50 mt-3">
-                          {Math.round(projectAnalysis?.avgScore ?? 0)}
-                        </div>
-                      </div>
-                      <div className="rounded-[24px] bg-zinc-950/70 border border-zinc-800 px-5 py-4">
-                        <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Trend</p>
-                        <div className="text-3xl font-semibold text-zinc-50 mt-3 capitalize">
-                          {projectAnalysis?.trend ?? 'stable'}
-                        </div>
-                      </div>
+                      ) : (
+                        <span className="flex items-center gap-2 text-sm px-3 py-2">
+                          <span className="text-red-400">Delete this project?</span>
+                          <button onClick={handleDeleteProject} className="text-red-400 underline hover:text-red-300 font-medium">Yes</button>
+                          <button onClick={() => setDeleteConfirm(false)} className="text-zinc-500 hover:text-zinc-300">No</button>
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  <div className="grid xl:grid-cols-[1.05fr_0.95fr] gap-6">
-                    <section className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-6">
-                      <div className="flex items-center justify-between gap-4">
-                        <div>
-                          <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Slide structure</p>
-                          <h3 className="text-2xl font-semibold text-zinc-50 mt-1">Deck preview</h3>
-                        </div>
-                        <span className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-300">
-                          {selectedProject.fileType ? selectedProject.fileType.toUpperCase() : 'No file'}
-                        </span>
-                      </div>
-                      <div className="mt-5 max-h-[520px] overflow-y-auto pr-1 space-y-4">
+                  {/* ──── RIGHT COLUMN: Content Tabs ──── */}
+                  <div className="min-w-0">
+                    {/* Tab Bar */}
+                    <div className="flex bg-zinc-900/50 rounded-xl p-1 border border-zinc-800/40">
+                      <button
+                        onClick={() => setActiveTab('deck')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          activeTab === 'deck'
+                            ? 'bg-zinc-800/80 text-zinc-100 shadow-sm'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        <Layers className="w-4 h-4" />
+                        Deck
+                        {selectedProject.slideCount > 0 && (
+                          <span className={`text-xs tabular-nums ${activeTab === 'deck' ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                            {selectedProject.slideCount}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('plan')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          activeTab === 'plan'
+                            ? 'bg-zinc-800/80 text-zinc-100 shadow-sm'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        <Target className="w-4 h-4" />
+                        Plan
+                        {latestGamePlan && (
+                          <span className="text-[10px] text-emerald-400 font-semibold uppercase tracking-wider">Ready</span>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('sessions')}
+                        className={`flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-lg text-sm font-medium transition-all duration-200 ${
+                          activeTab === 'sessions'
+                            ? 'bg-zinc-800/80 text-zinc-100 shadow-sm'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                      >
+                        <History className="w-4 h-4" />
+                        Sessions
+                        {projectRuns.length > 0 && (
+                          <span className={`text-xs tabular-nums ${activeTab === 'sessions' ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                            {projectRuns.length}
+                          </span>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* ──── Deck Tab ──── */}
+                    {activeTab === 'deck' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.25, ease: 'easeOut' }}
+                        className="mt-6"
+                      >
                         {selectedProject.slides.length === 0 ? (
-                          <div className="rounded-[28px] border border-dashed border-zinc-700 bg-zinc-950/60 p-5 text-sm text-zinc-400">
-                            Upload a presentation file to parse slide-by-slide content and speaker notes.
+                          <div className="rounded-2xl border border-zinc-800/50 bg-zinc-900/30 py-16 text-center">
+                            <Layers className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+                            <p className="text-base text-zinc-500">No slides uploaded yet.</p>
+                            <button
+                              onClick={() => {
+                                setSetupProject(selectedProject);
+                                setSetupOpen(true);
+                              }}
+                              className="mt-4 text-sm text-indigo-400 hover:text-indigo-300 font-medium"
+                            >
+                              Upload a deck
+                            </button>
                           </div>
                         ) : (
-                          selectedProject.slides.map((slide) => {
-                            const slideRisk = projectAnalysis?.slideSummary.find((entry) => entry.slideNumber === slide.slideNumber);
-                            return (
-                              <article key={slide.id} className="rounded-[28px] border border-zinc-800 bg-zinc-950/70 p-5">
-                                <div className="flex items-start justify-between gap-4">
-                                  <div>
-                                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Slide {slide.slideNumber}</p>
-                                    <h4 className="text-lg font-semibold text-zinc-100 mt-1">{slide.title}</h4>
-                                  </div>
-                                  <span className="rounded-full bg-zinc-900 px-3 py-1 text-xs capitalize text-zinc-300">
-                                    {slideRisk?.riskLevel ?? 'safe'}
-                                  </span>
-                                </div>
-                                <p className="text-sm text-zinc-400 mt-3 whitespace-pre-wrap line-clamp-5">{slide.content || 'No content extracted.'}</p>
-                                {slide.speakerNotes && (
-                                  <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-300 whitespace-pre-wrap">
-                                    {slide.speakerNotes}
-                                  </div>
-                                )}
-                              </article>
-                            );
-                          })
-                        )}
-                      </div>
-                    </section>
+                          <>
+                            {pdfLoading && (
+                              <div className="flex items-center gap-2 mb-4 text-sm text-zinc-500">
+                                <LoaderCircle className="w-4 h-4 animate-spin" />
+                                Rendering slide previews...
+                              </div>
+                            )}
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                              {selectedProject.slides.map((slide) => {
+                                const risk = projectAnalysis?.slideSummary.find((s) => s.slideNumber === slide.slideNumber);
+                                const thumb = pdfThumbnails.get(slide.slideNumber);
+                                const contentLines = (slide.content || '')
+                                  .split('\n')
+                                  .map((l) => l.trim())
+                                  .filter((l) => l && l !== slide.title);
 
-                    <section className="space-y-6">
-                      <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-6">
-                        <div className="flex items-center justify-between gap-4">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Latest plan</p>
-                            <h3 className="text-2xl font-semibold text-zinc-50 mt-1">Presentation readiness</h3>
-                          </div>
-                          <button
-                            onClick={handlePreparePresentation}
-                            className="rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600"
-                          >
-                            {latestGamePlan ? 'Review plan' : 'Generate plan'}
-                          </button>
-                        </div>
-                        {latestGamePlan ? (
-                          <div className="mt-5 space-y-4">
-                            <div className="rounded-[28px] border border-zinc-800 bg-zinc-950/60 p-4">
-                              <p className="text-sm text-zinc-400">Attention budget</p>
-                              <h4 className="text-xl font-semibold text-zinc-50 mt-2">
-                                {latestGamePlan.attentionBudget.maxInterventions} interventions over{' '}
-                                {latestGamePlan.attentionBudget.prioritySlides.length || 0} priority slides.
-                              </h4>
-                            </div>
-                            <div className="grid sm:grid-cols-2 gap-3">
-                              {latestGamePlan.segments.slice(0, 4).map((segment) => (
-                                <div key={segment.slideNumber} className="rounded-[24px] border border-zinc-800 bg-zinc-950/60 p-4">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <span className="text-sm font-medium text-zinc-100">Slide {segment.slideNumber}</span>
-                                    <span className="text-xs uppercase tracking-[0.16em] text-zinc-500">{segment.riskLevel}</span>
+                                return (
+                                  <div
+                                    key={slide.id}
+                                    className="group aspect-[16/10] rounded-xl overflow-hidden border border-zinc-700/25 hover:border-zinc-600/40 transition-all duration-200 cursor-default relative"
+                                  >
+                                    {thumb ? (
+                                      /* ── PDF Thumbnail ── */
+                                      <img
+                                        src={thumb}
+                                        alt={`Slide ${slide.slideNumber}: ${slide.title}`}
+                                        className="w-full h-full object-contain bg-white"
+                                      />
+                                    ) : (
+                                      /* ── Enhanced Text Card ── */
+                                      <div className="w-full h-full bg-gradient-to-br from-zinc-800/50 to-zinc-900/70 p-5 flex flex-col">
+                                        <h3 className="text-[15px] font-semibold text-zinc-100 line-clamp-2 leading-snug group-hover:text-white transition-colors">
+                                          {slide.title}
+                                        </h3>
+                                        {contentLines.length > 0 && (
+                                          <div className="mt-3 space-y-1.5 flex-1 min-h-0 overflow-hidden">
+                                            {contentLines.slice(0, 5).map((line, i) => (
+                                              <div key={i} className="flex items-start gap-2">
+                                                <span className="w-1 h-1 rounded-full bg-zinc-600 mt-[7px] shrink-0" />
+                                                <span className="text-xs text-zinc-500 line-clamp-1">{line}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {!contentLines.length && slide.speakerNotes && (
+                                          <p className="text-xs text-zinc-500 mt-3 line-clamp-3 leading-relaxed flex-1">
+                                            {slide.speakerNotes}
+                                          </p>
+                                        )}
+                                      </div>
+                                    )}
+                                    {/* ── Overlays ── */}
+                                    <div className="absolute top-3 left-3">
+                                      <span className={`inline-flex items-center justify-center w-8 h-8 rounded-lg text-xs font-mono font-medium border ${
+                                        thumb
+                                          ? 'bg-black/50 backdrop-blur-sm text-white/90 border-white/10'
+                                          : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30'
+                                      }`}>
+                                        {slide.slideNumber}
+                                      </span>
+                                    </div>
+                                    {risk && (
+                                      <div className="absolute top-3 right-3">
+                                        <span className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-md border ${
+                                          thumb ? 'backdrop-blur-sm' : ''
+                                        } ${
+                                          risk.riskLevel === 'fragile'
+                                            ? 'text-red-400 bg-red-500/15 border-red-500/25'
+                                            : risk.riskLevel === 'watch'
+                                              ? 'text-amber-400 bg-amber-500/15 border-amber-500/25'
+                                              : 'text-zinc-400 bg-zinc-800/50 border-zinc-700/20'
+                                        }`}>
+                                          {risk.riskLevel}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
-                                  <p className="text-sm text-zinc-400 mt-2 line-clamp-2">
-                                    {segment.knownIssues[0] || 'No recurring issue detected.'}
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </motion.div>
+                    )}
+
+                    {/* ──── Plan Tab ──── */}
+                    {activeTab === 'plan' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.25, ease: 'easeOut' }}
+                        className="mt-6"
+                      >
+                        {latestGamePlan ? (
+                          <div className="space-y-6">
+                            {/* Plan summary */}
+                            <div className="rounded-xl border border-zinc-800/50 bg-zinc-900/40 p-5">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="text-base text-zinc-200 font-medium">
+                                    {latestGamePlan.attentionBudget.maxInterventions} interventions across{' '}
+                                    {latestGamePlan.segments.length} slides
+                                  </p>
+                                  <p className="text-sm text-zinc-500 mt-1">
+                                    Based on {latestGamePlan.overview.totalRuns} rehearsal{latestGamePlan.overview.totalRuns !== 1 ? 's' : ''}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={handlePreparePresentation}
+                                  className="text-sm text-indigo-400 hover:text-indigo-300 font-medium px-3 py-1.5 rounded-lg hover:bg-indigo-500/10 transition-all"
+                                >
+                                  Full plan
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Segment cards */}
+                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                              {latestGamePlan.segments.map((seg) => (
+                                <div key={seg.slideNumber} className="rounded-xl border border-zinc-800/50 bg-zinc-900/40 px-5 py-4">
+                                  <div className="flex items-center justify-between gap-3 mb-2">
+                                    <span className="text-sm font-medium text-zinc-300">Slide {seg.slideNumber}</span>
+                                    <span className={`text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                                      seg.riskLevel === 'fragile'
+                                        ? 'text-red-400 bg-red-500/10'
+                                        : seg.riskLevel === 'watch'
+                                          ? 'text-amber-400 bg-amber-500/10'
+                                          : 'text-zinc-500 bg-zinc-800/40'
+                                    }`}>
+                                      {seg.riskLevel}
+                                    </span>
+                                  </div>
+                                  <p className="text-sm text-zinc-500 line-clamp-2">
+                                    {seg.knownIssues[0] || 'No issues'}
                                   </p>
                                 </div>
                               ))}
                             </div>
                           </div>
                         ) : (
-                          <div className="mt-5 rounded-[28px] border border-dashed border-zinc-700 bg-zinc-950/60 p-5 text-sm text-zinc-400">
-                            Run at least one rehearsal, then generate a game plan to inspect risk segments and cue policies before presentation mode.
+                          <div className="rounded-2xl border border-zinc-800/50 bg-zinc-900/30 py-16 text-center">
+                            <Target className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+                            <p className="text-base text-zinc-500">No game plan yet.</p>
+                            <button
+                              onClick={handlePreparePresentation}
+                              className="mt-4 text-sm text-indigo-400 hover:text-indigo-300 font-medium"
+                            >
+                              Generate after a rehearsal
+                            </button>
                           </div>
                         )}
-                      </div>
+                      </motion.div>
+                    )}
 
-                      <div className="rounded-[32px] border border-zinc-800 bg-zinc-900/60 p-6">
-                        <div className="flex items-center justify-between gap-4">
-                          <div>
-                            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Runs</p>
-                            <h3 className="text-2xl font-semibold text-zinc-50 mt-1">Recent sessions</h3>
+                    {/* ──── Sessions Tab ──── */}
+                    {activeTab === 'sessions' && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.25, ease: 'easeOut' }}
+                        className="mt-6 space-y-3"
+                      >
+                        {projectRuns.length === 0 ? (
+                          <div className="rounded-2xl border border-zinc-800/50 bg-zinc-900/30 py-16 text-center">
+                            <History className="w-8 h-8 text-zinc-700 mx-auto mb-3" />
+                            <p className="text-base text-zinc-500">No sessions yet.</p>
+                            <p className="text-sm text-zinc-600 mt-1">Start a rehearsal to build your history.</p>
                           </div>
-                          <span className="rounded-full bg-zinc-950 px-3 py-1 text-xs text-zinc-300">
-                            {projectRuns.length} total
-                          </span>
-                        </div>
-                        <div className="mt-5 max-h-[420px] overflow-y-auto pr-1 space-y-3">
-                          {projectRuns.length === 0 ? (
-                            <div className="rounded-[28px] border border-dashed border-zinc-700 bg-zinc-950/60 p-5 text-sm text-zinc-400">
-                              No sessions saved yet for this project.
-                            </div>
-                          ) : (
-                            projectRuns.map((run) => (
-                              <button
-                                key={run.id}
-                                onClick={() => void handleOpenRun(run.id)}
-                                className="w-full rounded-[26px] border border-zinc-800 bg-zinc-950/70 px-4 py-4 text-left hover:border-zinc-700 transition-colors"
-                              >
-                                <div className="flex items-start justify-between gap-4">
-                                  <div>
-                                    <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">{run.mode}</p>
-                                    <h4 className="text-lg font-semibold text-zinc-100 mt-1">
-                                      {run.overallScore != null ? `Score ${Math.round(run.overallScore)}` : 'No score captured'}
-                                    </h4>
-                                  </div>
-                                  <div className="text-right text-sm text-zinc-400">
-                                    <div className="inline-flex items-center gap-2">
-                                      <Clock3 className="w-4 h-4" />
-                                      {new Date(run.createdAt).toLocaleDateString()}
-                                    </div>
-                                    <div className="mt-2">{Math.floor(run.duration / 60000)}m {Math.floor((run.duration % 60000) / 1000)}s</div>
-                                  </div>
+                        ) : (
+                          projectRuns.map((run) => (
+                            <button
+                              key={run.id}
+                              onClick={() => void handleOpenRun(run.id)}
+                              className="w-full rounded-xl border border-zinc-800/50 bg-zinc-900/40 px-5 py-4 text-left hover:border-zinc-700/60 hover:bg-zinc-900/60 transition-all duration-200 group"
+                            >
+                              <div className="flex items-center justify-between gap-4">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {/* Mode badge */}
+                                  <span className={`shrink-0 inline-flex items-center gap-1.5 text-sm font-medium px-3 py-1 rounded-lg ${
+                                    run.mode === 'rehearsal'
+                                      ? 'bg-indigo-500/10 text-indigo-300 border border-indigo-500/20'
+                                      : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20'
+                                  }`}>
+                                    {run.mode === 'rehearsal' ? (
+                                      <Mic className="w-3.5 h-3.5" />
+                                    ) : (
+                                      <Presentation className="w-3.5 h-3.5" />
+                                    )}
+                                    <span className="capitalize">{run.mode}</span>
+                                  </span>
+                                  {/* Score */}
+                                  {run.overallScore != null && (
+                                    <span className="text-lg font-bold text-zinc-200 tabular-nums">
+                                      {Math.round(run.overallScore)}
+                                      <span className="text-xs text-zinc-500 font-normal ml-0.5">pts</span>
+                                    </span>
+                                  )}
                                 </div>
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      </div>
-                    </section>
+                                <div className="flex items-center gap-4 text-sm text-zinc-500 shrink-0">
+                                  <span className="tabular-nums">{Math.floor(run.duration / 60000)}m {Math.floor((run.duration % 60000) / 1000)}s</span>
+                                  <span>{new Date(run.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+                                  <ChevronRight className="w-4 h-4 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+                                </div>
+                              </div>
+                            </button>
+                          ))
+                        )}
+                      </motion.div>
+                    )}
                   </div>
-                </>
-              )}
-            </section>
+                </div>
+              </motion.div>
+            )}
           </div>
-        </div>
+        </main>
       </div>
 
       <ProjectSetup
