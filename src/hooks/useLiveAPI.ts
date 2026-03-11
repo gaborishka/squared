@@ -353,6 +353,26 @@ export function useLiveAPI({
     }
   }, []);
 
+  const isSessionTransportOpen = useCallback((session: any) => {
+    const readyState = session?.conn?.ws?.readyState;
+    if (typeof readyState === 'number') {
+      return readyState === 1;
+    }
+    return isSocketOpenRef.current;
+  }, []);
+
+  const withOpenSession = useCallback((handler: (session: any) => void) => {
+    const currentPromise = sessionRef.current;
+    if (!currentPromise || !isSocketOpenRef.current) return;
+    if (!isSessionReadyRef.current) return;
+    currentPromise.then((session: any) => {
+      if (sessionRef.current !== currentPromise || !isSocketOpenRef.current) return;
+      if (!isSessionReadyRef.current) return;
+      if (!isSessionTransportOpen(session)) return;
+      handler(session);
+    });
+  }, [isSessionTransportOpen]);
+
   const disconnect = useCallback((options?: { skipSessionClose?: boolean }) => {
     const shouldCloseSession = !options?.skipSessionClose;
     const currentSessionPromise = sessionRef.current;
@@ -511,24 +531,7 @@ export function useLiveAPI({
         ? `${baseInstruction}\n\nUse the following project and strategy context while coaching:\n${trimmedContext}`
         : baseInstruction;
 
-      const isSessionTransportOpen = (session: any) => {
-        const readyState = session?.conn?.ws?.readyState;
-        // 1 === WebSocket.OPEN
-        if (typeof readyState === 'number') {
-          return readyState === 1;
-        }
-        return isSocketOpenRef.current;
-      };
-
       let sessionPromise: Promise<any>;
-      const withOpenSession = (handler: (session: any) => void) => {
-        sessionPromise.then((session: any) => {
-          if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-          if (!isSessionReadyRef.current) return;
-          if (!isSessionTransportOpen(session)) return;
-          handler(session);
-        });
-      };
 
       const ingestInputTranscript = (rawText: string) => {
         const trimmed = rawText.trim();
@@ -640,7 +643,7 @@ export function useLiveAPI({
           const analysisCtx = analysisCanvas.getContext('2d');
 
           localVisualIntervalRef.current = window.setInterval(() => {
-            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+            if (!isSocketOpenRef.current) return;
             if (videoElement.readyState < 2) return;
             if (!analysisCtx) return;
 
@@ -859,7 +862,7 @@ export function useLiveAPI({
             }
 
             workletNode.port.onmessage = (e) => {
-              if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+              if (!isSocketOpenRef.current) return;
               const pcm16 = new Int16Array(e.data);
               const bytes = new Uint8Array(pcm16.buffer);
               let binaryString = '';
@@ -903,7 +906,7 @@ export function useLiveAPI({
             // Derived indicator updates come from live transcription + local audio level.
             if (onIndicatorsUpdate) {
               indicatorIntervalRef.current = window.setInterval(() => {
-                if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+                if (!isSocketOpenRef.current) return;
 
                 const now = Date.now();
                 const cutoff = now - TRANSCRIPT_PACE_WINDOW_MS;
@@ -1158,7 +1161,7 @@ export function useLiveAPI({
       setError(err.message);
       disconnect({ skipSessionClose: true });
     }
-  }, [mode, onIndicatorsUpdate, onMediaStream, onSlideAnalysis, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
+  }, [mode, onIndicatorsUpdate, onMediaStream, onSlideAnalysis, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState, withOpenSession]);
 
   return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }
