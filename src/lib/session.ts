@@ -118,22 +118,33 @@ export function mergeSlideAnalysis(
   return next;
 }
 
+const MAX_SLIDE_CONTENT_CHARS = 300;
+const MAX_SLIDE_NOTES_CHARS = 200;
+const MAX_OUTLINE_CHARS = 8000;
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '…';
+}
+
 function buildSlideOutline(project: ProjectDetails): string {
   if (project.slides.length === 0) {
-    return `Project: ${project.name}\nDescription: ${project.description || 'No description'}\nMain content:\n${project.content || 'No uploaded content yet.'}`;
+    return `Project: ${project.name}\nDescription: ${project.description || 'No description'}\nMain content:\n${truncate(project.content || 'No uploaded content yet.', MAX_SLIDE_CONTENT_CHARS)}`;
   }
 
-  return project.slides
-    .map((slide) =>
-      [
-        `Slide ${slide.slideNumber}: ${slide.title}`,
-        slide.content ? `Content: ${slide.content}` : '',
-        slide.speakerNotes ? `Speaker notes: ${slide.speakerNotes}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    )
-    .join('\n\n');
+  let outline = '';
+  for (const slide of project.slides) {
+    const parts = [`Slide ${slide.slideNumber}: ${slide.title}`];
+    if (slide.content) parts.push(`Content: ${truncate(slide.content, MAX_SLIDE_CONTENT_CHARS)}`);
+    if (slide.speakerNotes) parts.push(`Speaker notes: ${truncate(slide.speakerNotes, MAX_SLIDE_NOTES_CHARS)}`);
+    const entry = parts.join('\n');
+    if (outline.length + entry.length + 2 > MAX_OUTLINE_CHARS) {
+      outline += `\n\n... (${project.slides.length - project.slides.indexOf(slide)} more slides omitted for brevity)`;
+      break;
+    }
+    outline += (outline ? '\n\n' : '') + entry;
+  }
+  return outline;
 }
 
 export function buildRehearsalContext(project: ProjectDetails, analysis: ProjectAnalysis | null): string {

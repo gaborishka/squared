@@ -476,8 +476,13 @@ export function useLiveAPI({
         ? "You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, slide progress, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases."
         : "You are DebateCoach, a silent live presentation HUD. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send extremely short contextual cues, slide progress, timing status, and rescue teleprompter text when absolutely necessary. Keep interventions sparse and respect the attention budget in the provided game plan.";
 
-      const systemInstruction = contextText
-        ? `${baseInstruction}\n\nUse the following project and strategy context while coaching:\n${contextText}`
+      const MAX_CONTEXT_CHARS = 12000;
+      const trimmedContext = contextText && contextText.length > MAX_CONTEXT_CHARS
+        ? contextText.slice(0, MAX_CONTEXT_CHARS) + '\n\n(Context truncated for session stability.)'
+        : contextText;
+
+      const systemInstruction = trimmedContext
+        ? `${baseInstruction}\n\nUse the following project and strategy context while coaching:\n${trimmedContext}`
         : baseInstruction;
 
       const isSessionTransportOpen = (session: any) => {
