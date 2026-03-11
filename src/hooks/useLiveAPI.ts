@@ -248,16 +248,21 @@ export function useLiveAPI({
   contextText,
   onIndicatorsUpdate,
   onSlideAnalysis,
+  onTranscriptSegment,
+  onMediaStream,
 }: {
   mode: 'rehearsal' | 'presentation';
   contextText?: string;
   onIndicatorsUpdate?: (data: IndicatorUpdate) => void;
   onSlideAnalysis?: (payload: SlideAnalysisToolPayload) => void;
+  onTranscriptSegment?: (payload: { text: string; capturedAt: number }) => void;
+  onMediaStream?: (stream: MediaStream | null) => void;
 }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const isSpeakingRef = useRef(false);
 
   const sessionRef = useRef<Promise<unknown> | null>(null);
@@ -292,6 +297,25 @@ export function useLiveAPI({
   const missingFaceTicksRef = useRef(0);
   const missingPoseTicksRef = useRef(0);
   const lastLocalVisualSignatureRef = useRef('');
+
+  // Session management refs
+  const resumptionHandleRef = useRef<string | null>(null);
+  const isReconnectingRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const userInitiatedDisconnectRef = useRef(false);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const aiRef = useRef<GoogleGenAI | null>(null);
+  const connectConfigRef = useRef<any>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+
+  // Callback refs to avoid stale closures
+  const onIndicatorsUpdateRef = useRef(onIndicatorsUpdate);
+  onIndicatorsUpdateRef.current = onIndicatorsUpdate;
+  const onSlideAnalysisRef = useRef(onSlideAnalysis);
+  onSlideAnalysisRef.current = onSlideAnalysis;
+  const ingestInputTranscriptRef = useRef<(text: string) => void>(() => {});
+
+  const reconnectRef = useRef<() => void>(() => {});
 
   const resetDerivedIndicatorsState = useCallback(() => {
     recentWordTimestampsRef.current = [];
@@ -362,6 +386,7 @@ export function useLiveAPI({
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
+      onMediaStream?.(null);
     }
     if (videoIntervalRef.current) {
       clearInterval(videoIntervalRef.current);
@@ -418,6 +443,7 @@ export function useLiveAPI({
       }
 
       streamRef.current = stream;
+      onMediaStream?.(stream);
       if (videoElement && stream.getVideoTracks().length > 0) {
         videoElement.srcObject = stream;
       }
@@ -505,11 +531,13 @@ export function useLiveAPI({
       };
 
       const ingestInputTranscript = (rawText: string) => {
-        const normalized = rawText.trim().toLowerCase();
+        const trimmed = rawText.trim();
+        const normalized = trimmed.toLowerCase();
         if (!normalized) return;
 
         const now = Date.now();
         let delta = normalized;
+        let deltaText = trimmed;
         const previousChunk = lastTranscriptChunkRef.current;
 
         if (previousChunk) {
@@ -519,6 +547,7 @@ export function useLiveAPI({
           }
           if (normalized.startsWith(previousChunk)) {
             delta = normalized.slice(previousChunk.length);
+            deltaText = trimmed.slice(previousChunk.length).trim();
           } else if (previousChunk.startsWith(normalized)) {
             lastSpeechTimestampRef.current = now;
             return;
@@ -533,6 +562,9 @@ export function useLiveAPI({
           recentWordTimestampsRef.current.push(now);
         }
 
+        if (deltaText) {
+          onTranscriptSegment?.({ text: deltaText, capturedAt: now });
+        }
         if (words.length === 0) return;
 
         const breakdown = fillerBreakdownRef.current;
@@ -1126,7 +1158,7 @@ export function useLiveAPI({
       setError(err.message);
       disconnect({ skipSessionClose: true });
     }
-  }, [mode, onIndicatorsUpdate, onSlideAnalysis, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
+  }, [mode, onIndicatorsUpdate, onMediaStream, onSlideAnalysis, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState]);
 
   return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }
