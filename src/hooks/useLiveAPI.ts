@@ -617,6 +617,114 @@ export function useLiveAPI({
     setSpeakingState(false);
   }, [clearSpeakingTimers, resetDerivedIndicatorsState, resetLocalVisualState, setSpeakingState]);
 
+  const doReconnect = useCallback(async () => {
+    if (isReconnectingRef.current) return;
+    if (!aiRef.current || !connectConfigRef.current) return;
+
+    isReconnectingRef.current = true;
+    setIsReconnecting(true);
+    console.log(`[DebateCoach] Reconnecting (attempt ${reconnectAttemptsRef.current + 1})...`);
+
+    closeSession();
+
+    const ai = aiRef.current;
+    const storedConfig = connectConfigRef.current;
+    const playbackContext = playbackContextRef.current;
+
+    if (!playbackContext) {
+      console.error('[DebateCoach] Cannot reconnect: playback context missing');
+      isReconnectingRef.current = false;
+      setIsReconnecting(false);
+      setError('Connection lost. Please reconnect.');
+      return;
+    }
+
+    const config = {
+      ...storedConfig.config,
+      sessionResumption: {
+        handle: resumptionHandleRef.current || undefined,
+        transparent: false,
+      },
+    };
+
+    try {
+      const sessionPromise = ai.live.connect({
+        model: storedConfig.model,
+        config,
+        callbacks: {
+          onopen: () => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.log(`[DebateCoach] Reconnected at ${new Date().toISOString()}`);
+            isSocketOpenRef.current = true;
+            isSessionReadyRef.current = false;
+            reconnectAttemptsRef.current = 0;
+            isReconnectingRef.current = false;
+            setIsReconnecting(false);
+            // Push current local visual state to maintain indicator continuity
+            onIndicatorsUpdateRef.current?.({
+              eyeContact: eyeStatusRef.current.current,
+              posture: postureStatusRef.current.current,
+            });
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            handleServerMessage(message, sessionPromise, playbackContext, storedConfig.mode, ingestInputTranscriptRef.current, reconnectRef.current);
+          },
+          onclose: (event: CloseEvent) => {
+            if (sessionRef.current !== sessionPromise) return;
+            if (userInitiatedDisconnectRef.current) return;
+            console.debug(`[DebateCoach] Reconnected session closed`, { code: event.code, reason: event.reason });
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[DebateCoach] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              setIsReconnecting(false);
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
+          },
+          onerror: (err: any) => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.error('[DebateCoach] Reconnect error:', err);
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              setIsReconnecting(false);
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
+          },
+        },
+      });
+      sessionRef.current = sessionPromise;
+    } catch (err: any) {
+      console.error('[DebateCoach] Reconnect failed:', err);
+      isReconnectingRef.current = false;
+      if (reconnectAttemptsRef.current < 3) {
+        reconnectAttemptsRef.current++;
+        const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+        reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+      } else {
+        setIsReconnecting(false);
+        setError('Connection lost. Please reconnect.');
+        disconnect({ skipSessionClose: true });
+      }
+    }
+  }, [closeSession, disconnect, handleServerMessage]);
+
+  reconnectRef.current = doReconnect;
+
   const connect = useCallback(async (videoElement: HTMLVideoElement) => {
     setIsConnecting(true);
     setError(null);
