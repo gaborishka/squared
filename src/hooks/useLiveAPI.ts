@@ -616,6 +616,7 @@ export function useLiveAPI({
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error("API Key is missing");
       const ai = new GoogleGenAI({ apiKey, httpOptions: { "apiVersion": "v1alpha" } });
+      aiRef.current = ai;
 
       let stream: MediaStream;
       try {
@@ -676,6 +677,7 @@ export function useLiveAPI({
       }
       const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
       source.connect(workletNode);
+      workletNodeRef.current = workletNode;
 
       // Setup Audio Playback
       const playbackContext = new AudioContext({ sampleRate: 24000 });
@@ -932,12 +934,81 @@ export function useLiveAPI({
         }
       };
 
+      const toolDeclarations = [{
+        functionDeclarations: [{
+          name: "updateIndicators",
+          description: "Update the visual indicators on the user's screen based on their current performance. Call this tool frequently, even during the user's speech, to keep the UI updated in real-time.",
+          behavior: Behavior.NON_BLOCKING,
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              pace: { type: Type.STRING, description: "Current speaking pace (e.g., 'Good', 'Too Fast', 'Too Slow')" },
+              eyeContact: { type: Type.STRING, description: "Eye contact status (e.g., 'Looking at camera', 'Looking away')" },
+              posture: { type: Type.STRING, description: "Posture status (e.g., 'Good', 'Slouching')" },
+              fillerWords: {
+                type: Type.OBJECT,
+                description: "Object containing total count and breakdown of filler words. Example: { total: 2, breakdown: { 'um': 1, 'like': 1 } }",
+                properties: {
+                  total: { type: Type.INTEGER, description: "Total number of filler words" },
+                  breakdown: { type: Type.OBJECT, description: "Key-value pairs of word to its frequency" }
+                }
+              },
+              feedbackMessage: { type: Type.STRING, description: "A short feedback message to display to the user" },
+              confidenceScore: { type: Type.INTEGER, description: "1-100 confidence scale" },
+              volumeLevel: { type: Type.STRING, description: "'Too Quiet', 'Good', 'Too Loud'" },
+              overallScore: { type: Type.INTEGER, description: "1-100 overall performance score" },
+              currentSlide: { type: Type.INTEGER, description: "The slide number the user appears to be on right now." },
+              microPrompt: { type: Type.STRING, description: "A concise 1-3 word cue for the HUD." },
+              rescueText: { type: Type.STRING, description: "Short rescue teleprompter text for when the user is stuck." },
+              agentMode: {
+                type: Type.STRING,
+                description: "How forceful the current intervention should be.",
+                enum: ['monitor', 'soft_cue', 'directive', 'rescue'],
+              },
+              slideTimeRemaining: {
+                type: Type.INTEGER,
+                description: "Approximate seconds left before the speaker should transition off the current slide.",
+              }
+            },
+          }
+        }, {
+          name: "saveSlideAnalysis",
+          description: "Persist a slide-level coaching insight discovered during the live session.",
+          behavior: Behavior.NON_BLOCKING,
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              slideNumber: { type: Type.INTEGER, description: "The slide where the issue happened." },
+              issues: {
+                type: Type.ARRAY,
+                description: "Short descriptions of the issues observed on this slide.",
+                items: { type: Type.STRING },
+              },
+              bestPhrase: { type: Type.STRING, description: "A strong phrase the speaker used to recover or land the point." },
+              riskLevel: {
+                type: Type.STRING,
+                description: "Overall risk on this slide.",
+                enum: ['safe', 'watch', 'fragile'],
+              },
+            },
+            required: ['slideNumber', 'issues', 'riskLevel'],
+          }
+        }]
+      }];
+
       sessionPromise = ai.live.connect({
         model: "gemini-2.5-flash-native-audio-latest",
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           outputAudioTranscription: {},
+          sessionResumption: {
+            handle: resumptionHandleRef.current || undefined,
+            transparent: false,
+          },
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
           realtimeInputConfig: {
             activityHandling: mode === 'presentation'
               ? ActivityHandling.NO_INTERRUPTION
@@ -955,67 +1026,7 @@ export function useLiveAPI({
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
           },
           systemInstruction,
-          tools: [{
-            functionDeclarations: [{
-              name: "updateIndicators",
-              description: "Update the visual indicators on the user's screen based on their current performance. Call this tool frequently, even during the user's speech, to keep the UI updated in real-time.",
-              behavior: Behavior.NON_BLOCKING,
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  pace: { type: Type.STRING, description: "Current speaking pace (e.g., 'Good', 'Too Fast', 'Too Slow')" },
-                  eyeContact: { type: Type.STRING, description: "Eye contact status (e.g., 'Looking at camera', 'Looking away')" },
-                  posture: { type: Type.STRING, description: "Posture status (e.g., 'Good', 'Slouching')" },
-                  fillerWords: {
-                    type: Type.OBJECT,
-                    description: "Object containing total count and breakdown of filler words. Example: { total: 2, breakdown: { 'um': 1, 'like': 1 } }",
-                    properties: {
-                      total: { type: Type.INTEGER, description: "Total number of filler words" },
-                      breakdown: { type: Type.OBJECT, description: "Key-value pairs of word to its frequency" }
-                    }
-                  },
-                  feedbackMessage: { type: Type.STRING, description: "A short feedback message to display to the user" },
-                  confidenceScore: { type: Type.INTEGER, description: "1-100 confidence scale" },
-                  volumeLevel: { type: Type.STRING, description: "'Too Quiet', 'Good', 'Too Loud'" },
-                  overallScore: { type: Type.INTEGER, description: "1-100 overall performance score" },
-                  currentSlide: { type: Type.INTEGER, description: "The slide number the user appears to be on right now." },
-                  microPrompt: { type: Type.STRING, description: "A concise 1-3 word cue for the HUD." },
-                  rescueText: { type: Type.STRING, description: "Short rescue teleprompter text for when the user is stuck." },
-                  agentMode: {
-                    type: Type.STRING,
-                    description: "How forceful the current intervention should be.",
-                    enum: ['monitor', 'soft_cue', 'directive', 'rescue'],
-                  },
-                  slideTimeRemaining: {
-                    type: Type.INTEGER,
-                    description: "Approximate seconds left before the speaker should transition off the current slide.",
-                  }
-                },
-              }
-            }, {
-              name: "saveSlideAnalysis",
-              description: "Persist a slide-level coaching insight discovered during the live session.",
-              behavior: Behavior.NON_BLOCKING,
-              parameters: {
-                type: Type.OBJECT,
-                properties: {
-                  slideNumber: { type: Type.INTEGER, description: "The slide where the issue happened." },
-                  issues: {
-                    type: Type.ARRAY,
-                    description: "Short descriptions of the issues observed on this slide.",
-                    items: { type: Type.STRING },
-                  },
-                  bestPhrase: { type: Type.STRING, description: "A strong phrase the speaker used to recover or land the point." },
-                  riskLevel: {
-                    type: Type.STRING,
-                    description: "Overall risk on this slide.",
-                    enum: ['safe', 'watch', 'fragile'],
-                  },
-                },
-                required: ['slideNumber', 'issues', 'riskLevel'],
-              }
-            }]
-          }]
+          tools: toolDeclarations,
         },
         callbacks: {
           onopen: () => {
@@ -1185,6 +1196,40 @@ export function useLiveAPI({
       });
 
       sessionRef.current = sessionPromise;
+      connectConfigRef.current = {
+        model: "gemini-2.5-flash-native-audio-latest",
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          realtimeInputConfig: {
+            activityHandling: mode === 'presentation'
+              ? ActivityHandling.NO_INTERRUPTION
+              : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            automaticActivityDetection: {
+              disabled: false,
+              silenceDurationMs: mode === 'presentation' ? 500 : 200,
+              prefixPaddingMs: 20,
+            },
+          },
+          proactivity: { proactiveAudio: true },
+          enableAffectiveDialog: true,
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
+          },
+          systemInstruction,
+          sessionResumption: {
+            handle: resumptionHandleRef.current || undefined,
+            transparent: false,
+          },
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
+          tools: toolDeclarations,
+        },
+        mode,
+      };
 
     } catch (err: any) {
       console.error(err);
