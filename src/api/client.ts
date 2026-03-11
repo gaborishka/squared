@@ -79,4 +79,6 @@ export const api = {
     requestJson<GamePlan>(`/api/projects/${projectId}/gameplan/latest`),
   getGamePlan: (id: string) => requestJson<GamePlan>(`/api/gameplans/${id}`),
   getProjectFileUrl: (id: string) => `${API_BASE_URL}/api/projects/${id}/file`,
+  getProjectSlidePreviewUrl: (id: string, slideNumber: number) =>
+    `${API_BASE_URL}/api/projects/${id}/slides/${slideNumber}/preview`,
 };

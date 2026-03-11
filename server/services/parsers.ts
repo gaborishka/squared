@@ -3,6 +3,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import type { ParsedUpload, ProjectFileType } from '../../shared/types.js';
 import { getUploadsDir } from '../config/paths.js';
+import { createPptxSlidePreviews } from './slidePreviews.js';
 
 const uploadsDir = getUploadsDir();
 
@@ -186,6 +187,7 @@ export async function parseUploadFile(projectId: string, file: Express.Multer.Fi
 
   if (fileType === 'pptx') {
     slides = await parsePptxSlides(file.buffer);
+    await createPptxSlidePreviews(file.buffer, filePath);
   } else if (fileType === 'pdf') {
     slides = await parsePdfSlides(file.buffer);
   } else {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { api } from '../api/client';
+import type { ProjectDetails } from '../types';
 
 GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.mjs',
@@ -10,23 +11,60 @@ GlobalWorkerOptions.workerSrc = new URL(
 
 const THUMBNAIL_SCALE = 0.5;
 
-export function usePdfThumbnails(projectId: string | null, fileType: string | null) {
+export function useSlidePreviews(project: Pick<ProjectDetails, 'id' | 'fileType' | 'slides'> | null) {
   const [thumbnails, setThumbnails] = useState<Map<number, string>>(new Map());
   const [loading, setLoading] = useState(false);
   const pdfRef = useRef<PDFDocumentProxy | null>(null);
 
   useEffect(() => {
-    if (!projectId || fileType !== 'pdf') {
+    if (!project?.id || !project.fileType) {
       setThumbnails(new Map());
+      setLoading(false);
       return;
     }
 
     let cancelled = false;
+    const { id: projectId, fileType } = project;
+
+    if (fileType === 'pptx') {
+      setLoading(true);
+
+      async function loadPptxPreviews() {
+        try {
+          const entries = await Promise.all(
+            project.slides.map(async (slide) => {
+              const url = api.getProjectSlidePreviewUrl(projectId, slide.slideNumber);
+              const response = await fetch(url, { method: 'HEAD' });
+              return response.ok ? [slide.slideNumber, url] as const : null;
+            }),
+          );
+
+          if (!cancelled) {
+            setThumbnails(new Map(entries.filter((entry): entry is readonly [number, string] => entry != null)));
+          }
+        } catch (err) {
+          console.error('PPTX preview lookup failed:', err);
+          if (!cancelled) setThumbnails(new Map());
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      }
+
+      void loadPptxPreviews();
+      return;
+    }
+
+    if (fileType !== 'pdf') {
+      setThumbnails(new Map());
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
 
     async function render() {
       try {
-        const url = api.getProjectFileUrl(projectId!);
+        const url = api.getProjectFileUrl(projectId);
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch PDF');
         const buffer = await response.arrayBuffer();
@@ -67,7 +105,9 @@ export function usePdfThumbnails(projectId: string | null, fileType: string | nu
       pdfRef.current?.destroy();
       pdfRef.current = null;
     };
-  }, [projectId, fileType]);
+  }, [project]);
 
   return { thumbnails, loading };
 }
+
+export const usePdfThumbnails = useSlidePreviews;

@@ -19,7 +19,7 @@ import {
 import squaredLogo from '../../squared-cropped.png';
 import { api } from '../api/client';
 import type { GamePlan, ProjectAnalysis, ProjectDetails, RunDetails, RunSummary } from '../types';
-import { usePdfThumbnails } from '../hooks/usePdfThumbnails';
+import { useSlidePreviews } from '../hooks/usePdfThumbnails';
 import { GamePlanView } from './GamePlanView';
 import { ProjectSetup } from './ProjectSetup';
 import { RunAnalysis } from './RunAnalysis';
@@ -55,10 +55,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
     [projects, selectedProjectId],
   );
 
-  const { thumbnails: pdfThumbnails, loading: pdfLoading } = usePdfThumbnails(
-    selectedProjectId,
-    selectedProject?.fileType ?? null,
-  );
+  const { thumbnails: slidePreviews, loading: slidePreviewsLoading } = useSlidePreviews(selectedProject);
 
   const loadProjects = useCallback(async () => {
     setIsLoading(true);
@@ -485,7 +482,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
                           </div>
                         ) : (
                           <>
-                            {pdfLoading && (
+                            {slidePreviewsLoading && (
                               <div className="flex items-center gap-2 mb-4 text-sm text-zinc-500">
                                 <LoaderCircle className="w-4 h-4 animate-spin" />
                                 Rendering slide previews...
@@ -494,7 +491,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                               {selectedProject.slides.map((slide) => {
                                 const risk = projectAnalysis?.slideSummary.find((s) => s.slideNumber === slide.slideNumber);
-                                const thumb = pdfThumbnails.get(slide.slideNumber);
+                                const thumb = slidePreviews.get(slide.slideNumber);
                                 const contentLines = (slide.content || '')
                                   .split('\n')
                                   .map((l) => l.trim())
