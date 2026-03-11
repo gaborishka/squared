@@ -2,18 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_DELIVERY_AGENT_STATE,
-  DEFAULT_SCREEN_AGENT_STATE,
+  DEFAULT_AUDIENCE_AGENT_STATE,
   composeDualAgentOverlayState,
   composeLegacyIndicators,
   dualAgentToPillState,
   dualAgentToSubtitleState,
   mergeDeliveryAgentState,
-  mergeScreenAgentState,
+  mergeAudienceAgentState,
 } from '../src/types.ts';
 import {
-  buildScreenAgentContext,
-  formatScreenStateForDelivery,
-  shouldForwardScreenStateToDelivery,
+  buildAudienceAgentContext,
+  formatAudienceStateForDelivery,
+  shouldForwardAudienceStateToDelivery,
 } from '../src/lib/session.ts';
 
 const projectFixture = {
@@ -50,65 +50,63 @@ const projectFixture = {
   ],
 };
 
-test('screen agent owns slide and timing when capture is active', () => {
+test('delivery fallback always owns slide and timing (audience has no slide data)', () => {
   const delivery = mergeDeliveryAgentState(DEFAULT_DELIVERY_AGENT_STATE, {
     fallbackCurrentSlide: 2,
     fallbackSlideTimeRemaining: 18,
     microPrompt: 'Slow down',
   });
-  const screen = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+  const audience = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'active',
-    currentSlide: 5,
-    slideTimeRemaining: 42,
-    screenPrompt: 'Wrap slide',
+    engagement: 'high',
+    audiencePrompt: 'Audience engaged',
   });
 
-  const composed = composeLegacyIndicators(delivery, screen);
+  const composed = composeLegacyIndicators(delivery, audience);
 
-  assert.equal(composed.currentSlide, 5);
-  assert.equal(composed.slideTimeRemaining, 42);
+  assert.equal(composed.currentSlide, 2);
+  assert.equal(composed.slideTimeRemaining, 18);
   assert.equal(composed.microPrompt, 'Slow down');
 });
 
-test('delivery fallback owns slide and timing when screen agent is inactive', () => {
+test('delivery fallback owns slide and timing when audience agent is inactive', () => {
   const delivery = mergeDeliveryAgentState(DEFAULT_DELIVERY_AGENT_STATE, {
     fallbackCurrentSlide: 3,
     fallbackSlideTimeRemaining: 27,
   });
-  const screen = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+  const audience = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'inactive',
-    currentSlide: 9,
-    slideTimeRemaining: 99,
   });
 
-  const composed = composeLegacyIndicators(delivery, screen);
+  const composed = composeLegacyIndicators(delivery, audience);
 
   assert.equal(composed.currentSlide, 3);
   assert.equal(composed.slideTimeRemaining, 27);
 });
 
-test('dual overlay keeps delivery and screen lanes separate', () => {
+test('dual overlay keeps delivery and audience lanes separate', () => {
   const delivery = mergeDeliveryAgentState(DEFAULT_DELIVERY_AGENT_STATE, {
     agentMode: 'directive',
     microPrompt: 'Slow down',
     rescueText: 'Breathe and land the point.',
   });
-  const screen = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+  const audience = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'active',
-    currentSlide: 4,
-    screenPriority: 'critical',
-    screenPrompt: 'Next slide',
-    screenDetails: 'You are still on the intro slide.',
+    engagement: 'low',
+    handsRaised: 2,
+    priority: 'critical',
+    audiencePrompt: 'Audience disengaged',
+    audienceDetails: 'Multiple participants looking away.',
   });
 
-  const overlay = composeDualAgentOverlayState(delivery, screen);
-  const subtitles = dualAgentToSubtitleState(delivery, screen);
+  const overlay = composeDualAgentOverlayState(delivery, audience);
+  const subtitles = dualAgentToSubtitleState(delivery, audience);
 
   assert.equal(overlay.delivery.prompt, 'Slow down');
-  assert.equal(overlay.screen.prompt, 'Next slide');
+  assert.equal(overlay.audience.prompt, 'Audience disengaged');
   assert.equal(subtitles.delivery.mode, 'directive');
-  assert.equal(subtitles.screen.priority, 'critical');
-  assert.equal(subtitles.screen.currentSlide, 4);
+  assert.equal(subtitles.audience.priority, 'critical');
+  assert.equal(subtitles.audience.engagement, 'low');
 });
 
 test('pill composition retains capture health and shared metrics', () => {
@@ -119,85 +117,115 @@ test('pill composition retains capture health and shared metrics', () => {
     overallScore: 82,
     confidenceScore: 77,
   });
-  const screen = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+  const audience = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'lost',
-    currentSlide: 7,
-    slideTimeRemaining: 12,
   });
 
-  const pill = dualAgentToPillState(delivery, screen, '2:14', true);
+  const pill = dualAgentToPillState(delivery, audience, '2:14', true);
 
-  assert.equal(pill.currentSlide, 7);
-  assert.equal(pill.screenCaptureStatus, 'lost');
+  assert.equal(pill.audienceCaptureStatus, 'lost');
   assert.equal(pill.overallScore, 82);
   assert.equal(pill.elapsed, '2:14');
 });
 
 test('dual pill stays hidden before the desktop session starts', () => {
-  const pill = dualAgentToPillState(DEFAULT_DELIVERY_AGENT_STATE, DEFAULT_SCREEN_AGENT_STATE, '0:00', false);
+  const pill = dualAgentToPillState(DEFAULT_DELIVERY_AGENT_STATE, DEFAULT_AUDIENCE_AGENT_STATE, '0:00', false);
 
   assert.equal(pill.visible, false);
-  assert.equal(pill.screenCaptureStatus, 'inactive');
+  assert.equal(pill.audienceCaptureStatus, 'inactive');
 });
 
-test('screen state forwarding only triggers on meaningful changes', () => {
-  const previous = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+test('audience state forwarding only triggers on meaningful changes', () => {
+  const previous = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'active',
-    currentSlide: 3,
-    screenPrompt: 'Hold',
+    engagement: 'high',
+    audiencePrompt: 'All good',
   });
-  const same = mergeScreenAgentState(previous, {});
-  const changed = mergeScreenAgentState(previous, {
-    currentSlide: 4,
-    screenPrompt: 'Move on',
+  const same = mergeAudienceAgentState(previous, {});
+  const changed = mergeAudienceAgentState(previous, {
+    engagement: 'low',
+    audiencePrompt: 'Losing them',
   });
 
-  assert.equal(shouldForwardScreenStateToDelivery(previous, same), false);
-  assert.equal(shouldForwardScreenStateToDelivery(previous, changed), true);
+  assert.equal(shouldForwardAudienceStateToDelivery(previous, same), false);
+  assert.equal(shouldForwardAudienceStateToDelivery(previous, changed), true);
 });
 
-test('screen timing updates are bucketed before forwarding to delivery', () => {
-  const previous = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+test('audience engagement change triggers forwarding', () => {
+  const previous = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'active',
-    currentSlide: 5,
-    slideTimeRemaining: 58,
+    engagement: 'high',
+    reactions: '',
+    handsRaised: 0,
   });
-  const smallDelta = mergeScreenAgentState(previous, {
-    slideTimeRemaining: 52,
-  });
-  const thresholdDelta = mergeScreenAgentState(previous, {
-    slideTimeRemaining: 14,
+  const engagementChanged = mergeAudienceAgentState(previous, {
+    engagement: 'moderate',
   });
 
-  assert.equal(shouldForwardScreenStateToDelivery(previous, smallDelta), false);
-  assert.equal(shouldForwardScreenStateToDelivery(previous, thresholdDelta), true);
+  assert.equal(shouldForwardAudienceStateToDelivery(previous, engagementChanged), true);
 });
 
-test('screen state can be serialized into a delivery note', () => {
-  const screen = mergeScreenAgentState(DEFAULT_SCREEN_AGENT_STATE, {
+test('audience hands raised change triggers forwarding', () => {
+  const previous = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
     captureStatus: 'active',
-    currentSlide: 6,
-    slideTimeRemaining: 9,
-    screenPrompt: 'Wrap slide',
-    screenDetails: 'The shared screen still shows pricing.',
-    screenPriority: 'watch',
-    sourceLabel: 'Keynote',
+    engagement: 'high',
+    handsRaised: 0,
+  });
+  const handsChanged = mergeAudienceAgentState(previous, {
+    handsRaised: 3,
   });
 
-  const note = formatScreenStateForDelivery(screen);
-
-  assert.ok(note?.includes('[ScreenAgent]'));
-  assert.ok(note?.includes('slide=6'));
-  assert.ok(note?.includes('prompt="Wrap slide"'));
-  assert.ok(note?.includes('source="Keynote"'));
+  assert.equal(shouldForwardAudienceStateToDelivery(previous, handsChanged), true);
 });
 
-test('screen agent context keeps the agent tool-only', () => {
-  const context = buildScreenAgentContext({
+test('audience state can be serialized into a delivery note', () => {
+  const audience = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
+    captureStatus: 'active',
+    engagement: 'low',
+    reactions: 'confused, bored',
+    handsRaised: 2,
+    audiencePrompt: 'Re-engage audience',
+    audienceDetails: 'Multiple participants looking away from screen.',
+    priority: 'critical',
+  });
+
+  const note = formatAudienceStateForDelivery(audience);
+
+  assert.ok(note?.includes('[AudienceAgent]'));
+  assert.ok(note?.includes('engagement=low'));
+  assert.ok(note?.includes('reactions="confused, bored"'));
+  assert.ok(note?.includes('hands=2'));
+  assert.ok(note?.includes('prompt="Re-engage audience"'));
+});
+
+test('audience agent context sets up tool-only behavior', () => {
+  const context = buildAudienceAgentContext({
     mode: 'presentation',
     project: projectFixture,
   });
 
-  assert.ok(context.includes('only outward action should be updateScreenState'));
-  assert.ok(context.includes('do not narrate, chat, or coach directly'));
+  assert.ok(context.includes('updateAudienceState'));
+  assert.ok(context.includes('gallery'));
+});
+
+test('merge audience state preserves existing fields when update is partial', () => {
+  const base = mergeAudienceAgentState(DEFAULT_AUDIENCE_AGENT_STATE, {
+    captureStatus: 'active',
+    engagement: 'high',
+    reactions: 'nodding',
+    handsRaised: 1,
+    audiencePrompt: 'Engaged',
+    audienceDetails: 'Positive reactions',
+    priority: 'info',
+  });
+
+  const updated = mergeAudienceAgentState(base, {
+    engagement: 'moderate',
+  });
+
+  assert.equal(updated.engagement, 'moderate');
+  assert.equal(updated.reactions, 'nodding');
+  assert.equal(updated.handsRaised, 1);
+  assert.equal(updated.audiencePrompt, 'Engaged');
+  assert.equal(updated.captureStatus, 'active');
 });

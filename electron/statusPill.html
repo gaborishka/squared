@@ -37,10 +37,10 @@
       }
       .pill.visible { display: block; }
 
-      /* Row 1: timer · eye · mic · user · slide — evenly spaced */
+      /* Row 1: timer · indicators · badges */
       .top-row {
         display: flex; align-items: center;
-        justify-content: space-between;
+        gap: 12px;
         margin-bottom: 10px;
       }
       .timer {
@@ -48,13 +48,17 @@
         letter-spacing: -0.03em;
         font-variant-numeric: tabular-nums;
       }
+      .indicators {
+        display: flex; align-items: center; gap: 8px;
+        flex: 1;
+      }
       .ind {
         color: var(--neutral);
         transition: color 0.3s;
         line-height: 0;
       }
       .ind svg {
-        width: 24px; height: 24px;
+        width: 22px; height: 22px;
         stroke: currentColor; fill: none;
         stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
       }
@@ -63,27 +67,32 @@
       .ind.lvl-bad { color: var(--danger); }
       .ind.lvl-neutral { color: var(--neutral); }
 
-      .slide-badge {
-        font-size: 11px; color: var(--muted);
-        padding: 2px 8px;
+      .badges {
+        display: flex; align-items: center; gap: 6px;
+        flex-shrink: 0;
+      }
+      .badge {
+        font-size: 10px; color: var(--muted);
+        padding: 2px 7px;
         border-radius: 6px;
         background: rgba(255,255,255,0.06);
         white-space: nowrap;
+        font-variant-numeric: tabular-nums;
       }
-      .screen-badge {
+      .audience-dot {
         display: none;
-        margin: 0 0 10px auto;
-        width: fit-content;
-        font-size: 10px;
-        color: var(--muted);
-        padding: 2px 7px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.05);
-        white-space: nowrap;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
       }
-      .screen-badge.status-active { color: var(--ok); display: block; }
-      .screen-badge.status-requesting { color: var(--watch); display: block; }
-      .screen-badge.status-lost { color: var(--danger); display: block; }
+      .audience-dot.status-active { display: block; background: var(--ok); box-shadow: 0 0 6px rgba(52,211,153,0.5); }
+      .audience-dot.status-requesting { display: block; background: var(--watch); animation: pulse 1.2s infinite; }
+      .audience-dot.status-lost { display: block; background: var(--danger); box-shadow: 0 0 6px rgba(248,113,113,0.5); }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
 
       /* Row 2: metrics */
       .metrics {
@@ -113,22 +122,27 @@
     <div id="pill" class="pill">
       <div class="top-row">
         <span id="timer" class="timer">0:00</span>
-        <div id="ind-eye" class="ind lvl-neutral">
-          <svg viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+        <div class="indicators">
+          <div id="ind-eye" class="ind lvl-neutral">
+            <svg viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <div id="ind-pace" class="ind lvl-neutral">
+            <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+          </div>
+          <div id="ind-posture" class="ind lvl-neutral">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>
+          </div>
         </div>
-        <div id="ind-pace" class="ind lvl-neutral">
-          <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+        <div class="badges">
+          <span id="slide" class="badge">--</span>
+          <div id="audience-dot" class="audience-dot"></div>
+          <span id="audience-label" class="badge" style="display:none"></span>
         </div>
-        <div id="ind-posture" class="ind lvl-neutral">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>
-        </div>
-        <span id="slide" class="slide-badge">--</span>
       </div>
-      <div id="screen-badge" class="screen-badge">Screen live</div>
       <div class="metrics">
-        <span>Score <span id="score" class="val">—</span></span>
+        <span>Score <span id="score" class="val">&mdash;</span></span>
         <span>Fillers <span id="fillers" class="val">0</span></span>
-        <span>Conf <span id="confidence" class="val">—</span></span>
+        <span>Conf <span id="confidence" class="val">&mdash;</span></span>
       </div>
       <button id="stop-btn" class="stop-btn">&#9632; Stop</button>
     </div>
@@ -137,7 +151,8 @@
       const pill = document.getElementById('pill');
       const timer = document.getElementById('timer');
       const slide = document.getElementById('slide');
-      const screenBadge = document.getElementById('screen-badge');
+      const audienceDot = document.getElementById('audience-dot');
+      const audienceLabel = document.getElementById('audience-label');
       const indEye = document.getElementById('ind-eye');
       const indPace = document.getElementById('ind-pace');
       const indPosture = document.getElementById('ind-posture');
@@ -162,16 +177,18 @@
       function update(state) {
         pill.className = 'pill' + (state.visible ? ' visible' : '');
         timer.textContent = state.elapsed || '0:00';
-        slide.textContent = state.currentSlide != null ? 'Slide ' + state.currentSlide : '--';
-        const captureStatus = state.screenCaptureStatus || 'inactive';
-        screenBadge.className = 'screen-badge status-' + captureStatus;
-        screenBadge.textContent = captureStatus === 'active'
-          ? 'Screen live'
-          : captureStatus === 'requesting'
-            ? 'Screen connecting'
-            : captureStatus === 'lost'
-              ? 'Screen lost'
-              : 'Screen';
+        slide.textContent = state.currentSlide != null ? 'S' + state.currentSlide : '--';
+
+        const captureStatus = state.audienceCaptureStatus || 'inactive';
+        audienceDot.className = 'audience-dot status-' + captureStatus;
+        if (captureStatus === 'active' || captureStatus === 'requesting' || captureStatus === 'lost') {
+          const labels = { active: 'Audience', requesting: 'Connecting', lost: 'Lost' };
+          audienceLabel.textContent = labels[captureStatus];
+          audienceLabel.style.display = '';
+          audienceLabel.style.color = captureStatus === 'active' ? 'var(--ok)' : captureStatus === 'lost' ? 'var(--danger)' : 'var(--watch)';
+        } else {
+          audienceLabel.style.display = 'none';
+        }
 
         const eyeLevel = classify(state.eyeContact, ['camera','good','direct'], ['looking away','around','down']);
         const paceLevel = classify(state.pace, ['good','normal','perfect'], ['fast','slow']);
@@ -181,9 +198,9 @@
         setLevel(indPace, paceLevel);
         setLevel(indPosture, postureLevel);
 
-        score.textContent = state.overallScore > 0 ? state.overallScore : '—';
+        score.textContent = state.overallScore > 0 ? state.overallScore : '\u2014';
         fillers.textContent = state.fillerCount;
-        confidence.textContent = state.confidenceScore > 0 ? state.confidenceScore : '—';
+        confidence.textContent = state.confidenceScore > 0 ? state.confidenceScore : '\u2014';
       }
 
       stopBtn.addEventListener('click', () => {

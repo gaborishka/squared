@@ -1,13 +1,13 @@
 export * from '../shared/types';
 import type {
+  AudienceAgentState,
+  AudienceAgentUpdate,
   DeliveryAgentState,
   DeliveryAgentUpdate,
   DualAgentOverlayState,
   IndicatorData,
   IndicatorUpdate,
   PillState,
-  ScreenAgentState,
-  ScreenAgentUpdate,
   SubtitleState,
 } from '../shared/types';
 
@@ -45,13 +45,14 @@ export const DEFAULT_DELIVERY_AGENT_STATE: DeliveryAgentState = {
   fallbackSlideTimeRemaining: null,
 };
 
-export const DEFAULT_SCREEN_AGENT_STATE: ScreenAgentState = {
+export const DEFAULT_AUDIENCE_AGENT_STATE: AudienceAgentState = {
   captureStatus: 'inactive',
-  currentSlide: null,
-  slideTimeRemaining: null,
-  screenPrompt: '',
-  screenDetails: '',
-  screenPriority: 'info',
+  engagement: null,
+  reactions: '',
+  handsRaised: null,
+  audiencePrompt: '',
+  audienceDetails: '',
+  priority: 'info',
   sourceLabel: '',
 };
 
@@ -112,26 +113,25 @@ export function mergeDeliveryAgentState(
   };
 }
 
-export function mergeScreenAgentState(previous: ScreenAgentState | null, update: ScreenAgentUpdate): ScreenAgentState {
-  const base = previous ?? DEFAULT_SCREEN_AGENT_STATE;
+export function mergeAudienceAgentState(previous: AudienceAgentState | null, update: AudienceAgentUpdate): AudienceAgentState {
+  const base = previous ?? DEFAULT_AUDIENCE_AGENT_STATE;
   return {
     captureStatus: update.captureStatus ?? base.captureStatus,
-    currentSlide: update.currentSlide ?? base.currentSlide,
-    slideTimeRemaining: update.slideTimeRemaining ?? base.slideTimeRemaining,
-    screenPrompt: update.screenPrompt !== undefined ? update.screenPrompt : base.screenPrompt,
-    screenDetails: update.screenDetails !== undefined ? update.screenDetails : base.screenDetails,
-    screenPriority: update.screenPriority ?? base.screenPriority,
+    engagement: update.engagement !== undefined ? update.engagement : base.engagement,
+    reactions: update.reactions !== undefined ? update.reactions : base.reactions,
+    handsRaised: update.handsRaised !== undefined ? update.handsRaised : base.handsRaised,
+    audiencePrompt: update.audiencePrompt !== undefined ? update.audiencePrompt : base.audiencePrompt,
+    audienceDetails: update.audienceDetails !== undefined ? update.audienceDetails : base.audienceDetails,
+    priority: update.priority ?? base.priority,
     sourceLabel: update.sourceLabel !== undefined ? update.sourceLabel : base.sourceLabel,
   };
 }
 
 export function composeLegacyIndicators(
   delivery: DeliveryAgentState | null,
-  screen: ScreenAgentState | null,
+  _audience: AudienceAgentState | null,
 ): IndicatorData {
   const deliveryState = delivery ?? DEFAULT_DELIVERY_AGENT_STATE;
-  const screenState = screen ?? DEFAULT_SCREEN_AGENT_STATE;
-  const activeScreen = screenState.captureStatus === 'active' || screenState.captureStatus === 'lost';
 
   return {
     pace: deliveryState.pace,
@@ -143,53 +143,45 @@ export function composeLegacyIndicators(
     confidenceScore: deliveryState.confidenceScore,
     volumeLevel: deliveryState.volumeLevel,
     overallScore: deliveryState.overallScore,
-    currentSlide: activeScreen ? screenState.currentSlide : deliveryState.fallbackCurrentSlide,
+    currentSlide: deliveryState.fallbackCurrentSlide,
     microPrompt: deliveryState.microPrompt,
     rescueText: deliveryState.rescueText,
     agentMode: deliveryState.agentMode,
-    slideTimeRemaining: activeScreen ? screenState.slideTimeRemaining : deliveryState.fallbackSlideTimeRemaining,
+    slideTimeRemaining: deliveryState.fallbackSlideTimeRemaining,
   };
 }
 
 export function composeDualAgentOverlayState(
   delivery: DeliveryAgentState | null,
-  screen: ScreenAgentState | null,
+  audience: AudienceAgentState | null,
 ): DualAgentOverlayState {
   const deliveryState = delivery ?? DEFAULT_DELIVERY_AGENT_STATE;
-  const screenState = screen ?? DEFAULT_SCREEN_AGENT_STATE;
-  const effectiveCurrentSlide =
-    screenState.captureStatus === 'active' || screenState.captureStatus === 'lost'
-      ? screenState.currentSlide
-      : deliveryState.fallbackCurrentSlide;
-  const effectiveSlideTimeRemaining =
-    screenState.captureStatus === 'active' || screenState.captureStatus === 'lost'
-      ? screenState.slideTimeRemaining
-      : deliveryState.fallbackSlideTimeRemaining;
+  const audienceState = audience ?? DEFAULT_AUDIENCE_AGENT_STATE;
   const deliveryVisible = Boolean(deliveryState.microPrompt || deliveryState.rescueText || deliveryState.feedbackMessage);
-  const screenVisible = Boolean(
-    screenState.screenPrompt
-      || screenState.screenDetails
-      || screenState.captureStatus === 'lost'
-      || screenState.captureStatus === 'requesting',
+  const audienceVisible = Boolean(
+    audienceState.audiencePrompt
+      || audienceState.audienceDetails
+      || audienceState.captureStatus === 'lost'
+      || audienceState.captureStatus === 'requesting',
   );
 
   return {
-    visible: deliveryVisible || screenVisible,
-    currentSlide: effectiveCurrentSlide,
-    slideTimeRemaining: effectiveSlideTimeRemaining,
+    visible: deliveryVisible || audienceVisible,
     delivery: {
       visible: deliveryVisible,
       mode: deliveryState.agentMode,
       prompt: deliveryState.microPrompt,
       detail: deliveryState.rescueText || deliveryState.feedbackMessage,
     },
-    screen: {
-      visible: screenVisible,
-      priority: screenState.screenPriority,
-      captureStatus: screenState.captureStatus,
-      prompt: screenState.screenPrompt,
-      detail: screenState.screenDetails,
-      currentSlide: screenState.currentSlide,
+    audience: {
+      visible: audienceVisible,
+      priority: audienceState.priority,
+      captureStatus: audienceState.captureStatus,
+      prompt: audienceState.audiencePrompt,
+      detail: audienceState.audienceDetails,
+      engagement: audienceState.engagement,
+      reactions: audienceState.reactions,
+      handsRaised: audienceState.handsRaised,
     },
   };
 }
@@ -199,7 +191,7 @@ export function indicatorToPillState(indicators: IndicatorData | null, elapsed: 
     visible: indicators !== null,
     elapsed,
     currentSlide: indicators?.currentSlide ?? null,
-    screenCaptureStatus: 'inactive',
+    audienceCaptureStatus: 'inactive',
     pace: indicators?.pace ?? 'Analyzing...',
     eyeContact: indicators?.eyeContact ?? 'Analyzing...',
     posture: indicators?.posture ?? 'Analyzing...',
@@ -213,16 +205,16 @@ export function indicatorToPillState(indicators: IndicatorData | null, elapsed: 
 
 export function dualAgentToPillState(
   delivery: DeliveryAgentState | null,
-  screen: ScreenAgentState | null,
+  audience: AudienceAgentState | null,
   elapsed: string,
   visible = true,
 ): PillState {
-  const legacyIndicators = composeLegacyIndicators(delivery, screen);
+  const legacyIndicators = composeLegacyIndicators(delivery, audience);
   return {
     visible,
     elapsed,
     currentSlide: legacyIndicators.currentSlide,
-    screenCaptureStatus: (screen ?? DEFAULT_SCREEN_AGENT_STATE).captureStatus,
+    audienceCaptureStatus: (audience ?? DEFAULT_AUDIENCE_AGENT_STATE).captureStatus,
     pace: legacyIndicators.pace,
     eyeContact: legacyIndicators.eyeContact,
     posture: legacyIndicators.posture,
@@ -247,25 +239,34 @@ export function indicatorToSubtitleState(indicators: IndicatorData | null): Subt
       prompt: indicators?.microPrompt ?? '',
       detail: indicators?.rescueText ?? '',
     },
-    screen: {
+    audience: {
       visible: false,
       priority: 'info',
       captureStatus: 'inactive',
       prompt: '',
       detail: '',
-      currentSlide: indicators?.currentSlide ?? null,
+      engagement: null,
+      reactions: '',
+      handsRaised: null,
     },
   };
 }
 
 export function dualAgentToSubtitleState(
   delivery: DeliveryAgentState | null,
-  screen: ScreenAgentState | null,
+  audience: AudienceAgentState | null,
 ): SubtitleState {
-  const overlay = composeDualAgentOverlayState(delivery, screen);
+  const overlay = composeDualAgentOverlayState(delivery, audience);
+  // Only show audience subtitles for critical priority — routine observations are noise
+  const audienceState = audience ?? DEFAULT_AUDIENCE_AGENT_STATE;
+  const showAudienceSubtitle = audienceState.priority === 'critical'
+    || audienceState.captureStatus === 'lost';
+  const audienceSub = showAudienceSubtitle
+    ? overlay.audience
+    : { ...overlay.audience, visible: false, prompt: '', detail: '' };
   return {
-    visible: overlay.visible,
+    visible: overlay.delivery.visible || audienceSub.visible,
     delivery: overlay.delivery,
-    screen: overlay.screen,
+    audience: audienceSub,
   };
 }

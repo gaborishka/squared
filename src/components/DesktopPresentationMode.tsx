@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Clock3, Mic, Phone, Presentation, Zap } from 'lucide-react';
+import { ArrowLeft, Clock3, Mic, Phone, Presentation, Users, Zap } from 'lucide-react';
 import { api } from '../api/client';
 import { useDesktopDualLiveSession } from '../hooks/useDesktopDualLiveSession';
 import {
@@ -43,13 +43,13 @@ function formatElapsed(startTime: number | null): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function screenStatusLabel(status: 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported') {
-  if (status === 'active') return 'Screen live';
-  if (status === 'requesting') return 'Waiting for source';
-  if (status === 'lost') return 'Capture lost';
-  if (status === 'denied') return 'Screen skipped';
-  if (status === 'unsupported') return 'Screen unavailable';
-  return 'Delivery only';
+function audienceStatusLabel(status: 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported') {
+  if (status === 'active') return 'Audience live';
+  if (status === 'requesting') return 'Connecting';
+  if (status === 'lost') return 'Audience lost';
+  if (status === 'denied') return 'Audience skipped';
+  if (status === 'unsupported') return 'Unavailable';
+  return 'Off';
 }
 
 export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEnd }: DesktopPresentationModeProps) {
@@ -85,8 +85,11 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
     error,
     connect,
     disconnect,
+    connectAudience,
+    disconnectAudience,
+    isAudienceConnected,
     deliveryState,
-    screenState,
+    audienceState,
     legacyIndicators,
   } = useDesktopDualLiveSession({
     mode: 'presentation',
@@ -182,12 +185,12 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
         id: crypto.randomUUID(),
         timestamp: formatTimestampFromStart(sessionStartTimeRef.current),
         message: feedbackMessage,
-        slideNumber: currentSlideForFeedback(deliveryState, screenState),
+        slideNumber: currentSlideForFeedback(deliveryState),
         severity: feedbackSeverityFromAgentMode(deliveryState.agentMode),
         category: feedbackCategoryFromMessage(feedbackMessage),
       });
     }
-  }, [deliveryState, legacyIndicators, screenState]);
+  }, [deliveryState, legacyIndicators]);
 
   useEffect(() => {
     if (!isConnected || !sessionStartTimeRef.current) return;
@@ -208,10 +211,10 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
   useEffect(() => {
     if (!window.squaredElectron) return;
     window.squaredElectron.updatePill(
-      dualAgentToPillState(deliveryState, screenState, elapsed, isConnected || isConnecting),
+      dualAgentToPillState(deliveryState, audienceState, elapsed, isConnected || isConnecting),
     );
-    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, screenState));
-  }, [deliveryState, elapsed, isConnected, isConnecting, screenState]);
+    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, audienceState));
+  }, [deliveryState, elapsed, isConnected, isConnecting, audienceState]);
 
   useEffect(() => {
     return () => {
@@ -270,6 +273,14 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
 
   handleToggleConnectRef.current = handleToggleConnect;
 
+  const handleToggleAudience = () => {
+    if (isAudienceConnected) {
+      disconnectAudience();
+    } else {
+      void connectAudience();
+    }
+  };
+
   const currentSegment = legacyIndicators.currentSlide != null
     ? gamePlan.segments.find((segment) => segment.slideNumber === legacyIndicators.currentSlide)
     : null;
@@ -299,7 +310,7 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
       <main className="flex-1 flex gap-0 min-h-0">
         <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          {isConnected && <DualAgentOverlay delivery={deliveryState} screen={screenState} variant="presentation" />}
+          {isConnected && <DualAgentOverlay delivery={deliveryState} audience={audienceState} variant="presentation" />}
 
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
             {isConnected && (
@@ -307,6 +318,19 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
                 <Clock3 className="w-3 h-3" />
                 {elapsed}
               </div>
+            )}
+            {isConnected && (
+              <button
+                onClick={handleToggleAudience}
+                title="Toggle audience monitoring"
+                className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                  isAudienceConnected
+                    ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30'
+                    : 'bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Users className="w-[18px] h-[18px]" />
+              </button>
             )}
             <button
               onClick={handleToggleConnect}
@@ -389,15 +413,40 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
 
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-[10px] uppercase tracking-wider text-zinc-600">Screen lane</p>
-                  <span className="text-[10px] text-zinc-500">{screenStatusLabel(screenState.captureStatus)}</span>
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600">Audience lane</p>
+                  <span className="text-[10px] text-zinc-500">{audienceStatusLabel(audienceState.captureStatus)}</span>
                 </div>
-                <p className="text-sm font-semibold text-zinc-200">
-                  {screenState.screenPrompt || (screenState.captureStatus === 'active' ? 'Watching slides' : 'Delivery-only fallback')}
-                </p>
-                {(screenState.screenDetails || screenState.sourceLabel) && (
-                  <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
-                    {screenState.screenDetails || screenState.sourceLabel}
+                {audienceState.captureStatus === 'active' ? (
+                  <>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      {audienceState.engagement && (
+                        <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                          audienceState.engagement === 'high' ? 'text-emerald-400 bg-emerald-500/10' :
+                          audienceState.engagement === 'low' ? 'text-red-400 bg-red-500/10' :
+                          'text-amber-400 bg-amber-500/10'
+                        }`}>
+                          {audienceState.engagement === 'high' ? 'Engaged' : audienceState.engagement === 'low' ? 'Low engagement' : 'Moderate'}
+                        </span>
+                      )}
+                      {audienceState.handsRaised != null && audienceState.handsRaised > 0 && (
+                        <span className="text-xs font-medium text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded">
+                          {audienceState.handsRaised} hand{audienceState.handsRaised > 1 ? 's' : ''}
+                        </span>
+                      )}
+                    </div>
+                    {audienceState.reactions && (
+                      <p className="text-xs text-zinc-400 mt-1">{audienceState.reactions}</p>
+                    )}
+                    <p className="text-sm font-semibold text-zinc-200 mt-1.5">
+                      {audienceState.audiencePrompt || 'Watching audience'}
+                    </p>
+                    {audienceState.audienceDetails && (
+                      <p className="text-xs text-zinc-400 mt-1 leading-relaxed">{audienceState.audienceDetails}</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-zinc-500 mt-1.5">
+                    {audienceState.captureStatus === 'inactive' ? 'Enable with audience button' : audienceState.audiencePrompt || 'Not connected'}
                   </p>
                 )}
               </div>
@@ -445,7 +494,7 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
           ) : (
             <>
               <div className="px-4 py-3 border-b border-zinc-800/40">
-                <p className="text-[10px] uppercase tracking-wider text-zinc-600">Dual session</p>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600">Presentation session</p>
                 <p className="text-sm font-medium text-zinc-300 mt-1">{project.name}</p>
               </div>
 
@@ -463,10 +512,10 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <div className="flex items-center gap-2 mb-2">
                   <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                  <p className="text-xs font-medium text-zinc-300">Delivery + screen</p>
+                  <p className="text-xs font-medium text-zinc-300">Delivery + audience</p>
                 </div>
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Start will request a screen or window for ScreenAgent. If you cancel, delivery coaching still runs.
+                  Start begins delivery coaching. Use the audience button during the session to monitor your Zoom/Meet gallery.
                 </p>
               </div>
 
@@ -476,7 +525,7 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
                   <div>
                     <p className="text-xs text-zinc-300 font-medium">Silent coach ready</p>
                     <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
-                      DeliveryAgent and ScreenAgent will run side-by-side in the desktop overlay.
+                      DeliveryAgent coaches your delivery. AudienceAgent can optionally watch your call participants.
                     </p>
                   </div>
                 </div>

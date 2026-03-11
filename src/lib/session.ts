@@ -1,12 +1,12 @@
 import type {
   AgentMode,
+  AudienceAgentState,
   DeliveryAgentState,
   GamePlan,
   IndicatorData,
   ProjectAnalysis,
   ProjectDetails,
   RunFeedback,
-  ScreenAgentState,
   SlideAnalysisToolPayload,
 } from '../types';
 
@@ -236,88 +236,62 @@ export function buildDeliveryContext(options: {
 
   return [
     base,
-    'Screen agent coordination:',
-    '- You may receive trusted user messages prefixed with "[ScreenAgent]" that summarize what is happening on the shared screen.',
-    '- Treat those messages as reliable screen observations.',
-    '- In rehearsal mode, you may speak important screen-originated issues aloud if they matter for recovery.',
-    '- In presentation mode, stay silent and adapt only your delivery lane cues.',
+    'Audience agent coordination:',
+    '- You may receive trusted user messages prefixed with "[AudienceAgent]" that summarize audience engagement from the video call gallery view.',
+    '- Treat those messages as reliable audience observations.',
+    '- In rehearsal mode, audience monitoring is not available.',
+    '- In presentation mode, adapt your delivery lane cues based on audience signals (engagement drops, raised hands, confused reactions).',
   ].join('\n\n');
 }
 
-export function buildScreenAgentContext(options: {
+export function buildAudienceAgentContext(options: {
   mode: 'rehearsal' | 'presentation';
   project: ProjectDetails;
   analysis?: ProjectAnalysis | null;
   gamePlan?: GamePlan | null;
 }): string {
-  const timingPlan = options.gamePlan ?? options.analysis?.latestGamePlan ?? null;
-  const timingSummary = timingPlan
-    ? timingPlan.segments
-        .map((segment) => `Slide ${segment.slideNumber}: ${timingPlan.timingStrategy.perSlideTargets[segment.slideNumber] ?? 'n/a'}s target`)
-        .join('\n')
-    : 'No timing targets available yet.';
-
-  const riskSummary = options.analysis?.riskSegments.length
-    ? options.analysis.riskSegments
-        .slice(0, 8)
-        .map((segment) => `Slide ${segment.slideNumber ?? '?'}: ${segment.notes || segment.riskType}`)
-        .join('\n')
-    : 'No repeated screen-side risks recorded yet.';
-
   return [
     `Project name: ${options.project.name}`,
     options.project.description ? `Project description: ${options.project.description}` : '',
-    'Presentation structure:',
-    buildSlideOutline(options.project),
-    'Timing targets:',
-    timingSummary,
-    'Known weak spots:',
-    riskSummary,
+    `Session mode: ${options.mode}`,
     'Instructions:',
-    '- You observe only the shared screen.',
-    '- Your only outward action should be updateScreenState; do not narrate, chat, or coach directly.',
-    '- Use updateScreenState to report currentSlide, slideTimeRemaining, capture health, and concise screen/navigation guidance.',
-    '- Detect wrong window, stalls, transitions, or lost capture when possible.',
-    '- Keep screenPrompt short and action-oriented. Put extra context in screenDetails.',
-    '- Use currentSlide only when you are reasonably confident. Leave it empty when uncertain.',
+    '- You observe the video call gallery view showing audience participants.',
+    '- Your only outward action is updateAudienceState; do not narrate, chat, or coach directly.',
+    '- Watch for: engagement (attentive vs distracted/multitasking), reactions (confused, nodding, bored, excited), hands raised (Zoom/Meet UI or physical).',
+    '- Report meaningful changes via updateAudienceState. Do not spam minor fluctuations.',
+    '- Keep audiencePrompt short and actionable for the speaker. Put richer context in audienceDetails.',
+    '- Set priority to "critical" when hands are raised or engagement drops sharply. Use "watch" for gradual declines. Use "info" for routine observations.',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
-export function formatScreenStateForDelivery(state: ScreenAgentState): string | null {
+export function formatAudienceStateForDelivery(state: AudienceAgentState): string | null {
   if (state.captureStatus === 'inactive' || state.captureStatus === 'unsupported' || state.captureStatus === 'denied') {
     return null;
   }
 
-  const parts = ['[ScreenAgent]'];
+  const parts = ['[AudienceAgent]'];
   parts.push(`capture=${state.captureStatus}`);
-  if (state.currentSlide != null) parts.push(`slide=${state.currentSlide}`);
-  if (state.slideTimeRemaining != null) parts.push(`slide_time_remaining=${state.slideTimeRemaining}s`);
-  if (state.screenPrompt) parts.push(`prompt="${state.screenPrompt}"`);
-  if (state.screenDetails) parts.push(`details="${state.screenDetails}"`);
-  if (state.sourceLabel) parts.push(`source="${state.sourceLabel}"`);
-  parts.push(`priority=${state.screenPriority}`);
+  if (state.engagement) parts.push(`engagement=${state.engagement}`);
+  if (state.reactions) parts.push(`reactions="${state.reactions}"`);
+  if (state.handsRaised != null) parts.push(`hands=${state.handsRaised}`);
+  if (state.audiencePrompt) parts.push(`prompt="${state.audiencePrompt}"`);
+  if (state.audienceDetails) parts.push(`details="${state.audienceDetails}"`);
+  parts.push(`priority=${state.priority}`);
   return parts.join(' | ');
 }
 
-export function shouldForwardScreenStateToDelivery(
-  previous: ScreenAgentState | null,
-  next: ScreenAgentState,
+export function shouldForwardAudienceStateToDelivery(
+  previous: AudienceAgentState | null,
+  next: AudienceAgentState,
 ): boolean {
-  const timingBucket = (value: number | null) => {
-    if (value == null) return null;
-    if (value <= 5) return 5;
-    if (value <= 15) return 15;
-    if (value <= 30) return 30;
-    return Math.floor(value / 30) * 30;
-  };
-
   if (!previous) {
     return Boolean(
-      next.currentSlide != null
-      || next.screenPrompt
-      || next.screenDetails
+      next.engagement
+      || next.reactions
+      || next.handsRaised
+      || next.audiencePrompt
       || next.captureStatus === 'active'
       || next.captureStatus === 'lost',
     );
@@ -325,18 +299,15 @@ export function shouldForwardScreenStateToDelivery(
 
   return (
     previous.captureStatus !== next.captureStatus
-    || previous.currentSlide !== next.currentSlide
-    || timingBucket(previous.slideTimeRemaining) !== timingBucket(next.slideTimeRemaining)
-    || previous.screenPrompt !== next.screenPrompt
-    || previous.screenDetails !== next.screenDetails
-    || previous.screenPriority !== next.screenPriority
-    || previous.sourceLabel !== next.sourceLabel
+    || previous.engagement !== next.engagement
+    || previous.reactions !== next.reactions
+    || previous.handsRaised !== next.handsRaised
+    || previous.audiencePrompt !== next.audiencePrompt
+    || previous.audienceDetails !== next.audienceDetails
+    || previous.priority !== next.priority
   );
 }
 
-export function currentSlideForFeedback(delivery: DeliveryAgentState, screen: ScreenAgentState | null): number | null {
-  if (screen && (screen.captureStatus === 'active' || screen.captureStatus === 'lost') && screen.currentSlide != null) {
-    return screen.currentSlide;
-  }
+export function currentSlideForFeedback(delivery: DeliveryAgentState): number | null {
   return delivery.fallbackCurrentSlide;
 }

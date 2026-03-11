@@ -25,6 +25,11 @@ await copyResource(
 );
 
 await copyResource(
+  path.resolve(projectRoot, 'electron/sourcePicker.html'),
+  path.resolve(distResourcesDir, 'electron/sourcePicker.html'),
+);
+
+await copyResource(
   path.resolve(projectRoot, 'electron/assets'),
   path.resolve(distResourcesDir, 'electron/assets'),
 );

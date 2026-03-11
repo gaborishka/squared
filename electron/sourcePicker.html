@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Choose Source</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1e1e1e;
+        --card: #2a2a2a;
+        --card-hover: #333;
+        --card-selected: #3b3b5c;
+        --border: rgba(255,255,255,0.08);
+        --border-selected: rgba(99,102,241,0.6);
+        --text: #e4e4e7;
+        --muted: #a1a1aa;
+        --accent: #6366f1;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%; height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        color: var(--text);
+        user-select: none;
+      }
+      .container {
+        display: flex; flex-direction: column;
+        height: 100%; padding: 20px 24px;
+      }
+      h1 {
+        font-size: 16px; font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .subtitle {
+        font-size: 12px; color: var(--muted);
+        margin-bottom: 16px;
+      }
+      .grid {
+        flex: 1; overflow-y: auto;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+        padding-bottom: 12px;
+      }
+      .grid::-webkit-scrollbar { width: 6px; }
+      .grid::-webkit-scrollbar-track { background: transparent; }
+      .grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+      .source {
+        cursor: pointer;
+        border-radius: 10px;
+        border: 2px solid var(--border);
+        background: var(--card);
+        overflow: hidden;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .source:hover {
+        border-color: rgba(255,255,255,0.18);
+        background: var(--card-hover);
+      }
+      .source.selected {
+        border-color: var(--border-selected);
+        background: var(--card-selected);
+      }
+      .thumb-wrap {
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        background: #111;
+        display: flex; align-items: center; justify-content: center;
+        overflow: hidden;
+      }
+      .thumb-wrap img {
+        width: 100%; height: 100%;
+        object-fit: contain;
+      }
+      .source-label {
+        padding: 8px 10px;
+        font-size: 11px;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .source.selected .source-label { color: var(--text); }
+
+      .actions {
+        display: flex; justify-content: flex-end; gap: 10px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border);
+        margin-top: 4px;
+      }
+      button {
+        font-size: 13px; font-weight: 500;
+        padding: 7px 20px;
+        border-radius: 8px; border: none;
+        cursor: pointer; transition: background 0.15s;
+      }
+      .btn-cancel {
+        background: rgba(255,255,255,0.08);
+        color: var(--text);
+      }
+      .btn-cancel:hover { background: rgba(255,255,255,0.14); }
+      .btn-share {
+        background: var(--accent);
+        color: white;
+        opacity: 0.5; pointer-events: none;
+      }
+      .btn-share.active {
+        opacity: 1; pointer-events: auto;
+      }
+      .btn-share.active:hover { background: #5558e6; }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Choose what AudienceAgent should watch</h1>
+      <p class="subtitle">Pick the gallery view or meeting window showing your audience.</p>
+      <div id="grid" class="grid"></div>
+      <div class="actions">
+        <button id="cancel-btn" class="btn-cancel">Cancel</button>
+        <button id="share-btn" class="btn-share">Share</button>
+      </div>
+    </div>
+
+    <script>
+      const grid = document.getElementById('grid');
+      const cancelBtn = document.getElementById('cancel-btn');
+      const shareBtn = document.getElementById('share-btn');
+      let selectedId = null;
+
+      function selectSource(id) {
+        selectedId = id;
+        document.querySelectorAll('.source').forEach(el => {
+          el.classList.toggle('selected', el.dataset.id === id);
+        });
+        shareBtn.classList.toggle('active', Boolean(id));
+      }
+
+      function renderSources(sources) {
+        grid.innerHTML = '';
+        sources.forEach(source => {
+          const card = document.createElement('div');
+          card.className = 'source';
+          card.dataset.id = source.id;
+
+          const thumbWrap = document.createElement('div');
+          thumbWrap.className = 'thumb-wrap';
+          const img = document.createElement('img');
+          img.src = source.thumbnail;
+          img.alt = '';
+          thumbWrap.appendChild(img);
+
+          const label = document.createElement('div');
+          label.className = 'source-label';
+          label.textContent = source.type === 'screen' ? 'Entire screen' : source.name;
+
+          card.appendChild(thumbWrap);
+          card.appendChild(label);
+          card.addEventListener('click', () => selectSource(source.id));
+          card.addEventListener('dblclick', () => {
+            selectSource(source.id);
+            confirm();
+          });
+          grid.appendChild(card);
+        });
+      }
+
+      function confirm() {
+        if (selectedId && window.squaredElectron?.selectPickerSource) {
+          window.squaredElectron.selectPickerSource(selectedId);
+        }
+      }
+
+      cancelBtn.addEventListener('click', () => {
+        if (window.squaredElectron?.selectPickerSource) {
+          window.squaredElectron.selectPickerSource(null);
+        }
+      });
+
+      shareBtn.addEventListener('click', confirm);
+
+      if (window.squaredElectron?.onPickerSources) {
+        window.squaredElectron.onPickerSources(renderSources);
+      }
+    </script>
+  </body>
+</html>

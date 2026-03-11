@@ -7,7 +7,7 @@ const hiddenPill: PillState = {
   visible: false,
   elapsed: '0:00',
   currentSlide: null,
-  screenCaptureStatus: 'inactive',
+  audienceCaptureStatus: 'inactive',
   pace: '',
   eyeContact: '',
   posture: '',
@@ -26,13 +26,15 @@ const hiddenSubtitle: SubtitleState = {
     prompt: '',
     detail: '',
   },
-  screen: {
+  audience: {
     visible: false,
     priority: 'info',
     captureStatus: 'inactive',
     prompt: '',
     detail: '',
-    currentSlide: null,
+    engagement: null,
+    reactions: '',
+    handsRaised: null,
   },
 };
 

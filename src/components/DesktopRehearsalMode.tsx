@@ -26,15 +26,6 @@ interface DesktopRehearsalModeProps {
   onSessionEnd: () => void;
 }
 
-function screenStatusLabel(status: 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported') {
-  if (status === 'active') return 'Screen live';
-  if (status === 'requesting') return 'Waiting for source';
-  if (status === 'lost') return 'Capture lost';
-  if (status === 'denied') return 'Screen skipped';
-  if (status === 'unsupported') return 'Screen unavailable';
-  return 'Delivery only';
-}
-
 export function DesktopRehearsalMode({
   project,
   analysis,
@@ -81,7 +72,7 @@ export function DesktopRehearsalMode({
     analyserRef,
     isSpeaking,
     deliveryState,
-    screenState,
+    audienceState,
     legacyIndicators,
   } = useDesktopDualLiveSession({
     mode: 'rehearsal',
@@ -184,13 +175,13 @@ export function DesktopRehearsalMode({
 
       feedbackPayloadRef.current.unshift({
         ...feedbackEntry,
-        slideNumber: currentSlideForFeedback(deliveryState, screenState),
+        slideNumber: currentSlideForFeedback(deliveryState),
         severity: feedbackSeverityFromAgentMode(deliveryState.agentMode),
         category: feedbackCategoryFromMessage(feedbackMessage),
       });
       setFeedbackHistory((current) => [feedbackEntry, ...current]);
     }
-  }, [deliveryState, legacyIndicators, screenState]);
+  }, [deliveryState, legacyIndicators]);
 
   useEffect(() => {
     if (!isConnected || !sessionStartTimeRef.current) return;
@@ -211,10 +202,10 @@ export function DesktopRehearsalMode({
   useEffect(() => {
     if (!window.squaredElectron) return;
     window.squaredElectron.updatePill(
-      dualAgentToPillState(deliveryState, screenState, elapsed, isConnected || isConnecting),
+      dualAgentToPillState(deliveryState, audienceState, elapsed, isConnected || isConnecting),
     );
-    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, screenState));
-  }, [deliveryState, elapsed, isConnected, isConnecting, screenState]);
+    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, audienceState));
+  }, [deliveryState, elapsed, isConnected, isConnecting, audienceState]);
 
   useEffect(() => {
     return () => {
@@ -296,7 +287,7 @@ export function DesktopRehearsalMode({
       <main className="flex-1 flex gap-0 min-h-0">
         <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          {isConnected && <DualAgentOverlay delivery={deliveryState} screen={screenState} variant="rehearsal" />}
+          {isConnected && <DualAgentOverlay delivery={deliveryState} audience={audienceState} variant="rehearsal" />}
 
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
             <button className="w-10 h-10 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors">
@@ -371,21 +362,6 @@ export function DesktopRehearsalMode({
             </div>
           )}
 
-          <div className="px-4 py-3 border-b border-zinc-800/40">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] uppercase tracking-wider text-zinc-600">Screen lane</p>
-              <span className="text-[10px] text-zinc-500">{screenStatusLabel(screenState.captureStatus)}</span>
-            </div>
-            <p className="text-sm font-semibold text-zinc-200">
-              {screenState.screenPrompt || (screenState.captureStatus === 'active' ? 'Watching slides' : 'Delivery-only fallback')}
-            </p>
-            {(screenState.screenDetails || screenState.sourceLabel) && (
-              <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
-                {screenState.screenDetails || screenState.sourceLabel}
-              </p>
-            )}
-          </div>
-
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div className="px-4 py-3 flex items-center gap-2 border-b border-zinc-800/40">
               <Mic className="w-3.5 h-3.5 text-indigo-400" />
@@ -408,9 +384,9 @@ export function DesktopRehearsalMode({
                   <div className="flex items-start gap-2.5 rounded-xl bg-zinc-950/40 px-3.5 py-3">
                     <Sparkles className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-xs text-zinc-300 font-medium">Dual context loaded</p>
+                      <p className="text-xs text-zinc-300 font-medium">Coach ready</p>
                       <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
-                        Start will spin up DeliveryAgent and ScreenAgent side-by-side. Canceling screen share keeps delivery coaching alive.
+                        Start will activate DeliveryAgent for real-time voice coaching during your rehearsal.
                       </p>
                     </div>
                   </div>

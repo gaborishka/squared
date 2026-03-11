@@ -12,6 +12,7 @@ export interface ElectronPaths {
   serverEntry: string;
   statusPillHtmlPath: string;
   subtitlesHtmlPath: string;
+  sourcePickerHtmlPath: string;
   trayIconPath: string;
   userDataPath: string;
   executableDir: string;
@@ -33,6 +34,7 @@ export function getElectronPaths(): ElectronPaths {
       : path.resolve(resourcesRoot, 'dist-server/server/index.js'),
     statusPillHtmlPath: path.resolve(resourcesRoot, 'electron/statusPill.html'),
     subtitlesHtmlPath: path.resolve(resourcesRoot, 'electron/subtitles.html'),
+    sourcePickerHtmlPath: path.resolve(resourcesRoot, 'electron/sourcePicker.html'),
     trayIconPath: path.resolve(resourcesRoot, 'electron/assets/tray-template.svg'),
     userDataPath: app.getPath('userData'),
     executableDir: path.dirname(app.getPath('exe')),

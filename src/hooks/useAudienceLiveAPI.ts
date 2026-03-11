@@ -9,41 +9,48 @@ import {
   TurnCoverage,
   Type,
 } from '@google/genai';
-import type { ScreenAgentUpdate } from '../types';
+import type { AudienceAgentUpdate } from '../types';
 
-const SCREEN_FRAME_INTERVAL_MS = 1200;
-const SCREEN_LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
+const AUDIENCE_FRAME_INTERVAL_MS = 1200;
+const AUDIENCE_LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
 
-function getScreenBaseInstruction(mode: 'rehearsal' | 'presentation'): string {
+function getAudienceBaseInstruction(mode: 'rehearsal' | 'presentation'): string {
   return [
-    'You are ScreenAgent, a specialist that watches the shared presentation screen.',
+    'You are AudienceAgent, a specialist that watches the video call gallery view showing audience participants.',
     `The session mode is ${mode}.`,
-    'Your only valid outward action is updateScreenState.',
+    'Your only valid outward action is updateAudienceState.',
     'Do not narrate, chat, coach, or provide direct user-facing responses.',
-    'Use updateScreenState for every meaningful change: slide change, timing risk, wrong window, capture issue, or when a concise navigation hint is useful.',
-    'Keep screenPrompt short. Put richer context in screenDetails.',
-    'If you are uncertain about the current slide, leave currentSlide empty.',
+    'If the transport requires an audio response channel, treat it as an implementation detail and still communicate only through updateAudienceState.',
+    'Watch for: engagement (are participants attentive, looking at camera, or distracted/multitasking), reactions (confused expressions, nodding, boredom, excitement, laughter), hands raised (Zoom/Meet hand-raise icons or physical hand raises).',
+    'Call updateAudienceState FREQUENTLY — every time you receive a new frame, call the tool with your current assessment. The indicator fields (engagement, reactions, handsRaised, priority) feed a live dashboard and must stay fresh. Do not wait for big changes — even confirming the same state is valuable.',
+    '',
+    'IMPORTANT — two categories of fields:',
+    '1. INDICATOR fields (update on EVERY call): engagement, reactions, handsRaised, priority. Always set these.',
+    '2. SUBTITLE fields (audiencePrompt, audienceDetails): these create on-screen subtitles that overlay the speaker\'s view. Set audiencePrompt="" and audienceDetails="" on most calls. Only set them when something truly critical persists for several minutes (hands raised for a long time, engagement collapsed to "low" and stayed there). Think of subtitles as an emergency alarm.',
+    '',
+    'Set priority to "critical" when hands are raised or engagement drops sharply. Use "watch" for gradual declines. Use "info" for routine observations.',
   ].join(' ');
 }
 
-export function useScreenLiveAPI({
+export function useAudienceLiveAPI({
   mode,
   contextText,
   onUpdate,
 }: {
   mode: 'rehearsal' | 'presentation';
   contextText?: string;
-  onUpdate?: (data: ScreenAgentUpdate) => void;
+  onUpdate?: (data: AudienceAgentUpdate) => void;
 }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const sessionRef = useRef<Promise<any> | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+  const nudgeIntervalRef = useRef<number | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const isSocketOpenRef = useRef(false);
   const isSessionReadyRef = useRef(false);
@@ -71,6 +78,10 @@ export function useScreenLiveAPI({
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
     }
+    if (nudgeIntervalRef.current) {
+      clearInterval(nudgeIntervalRef.current);
+      nudgeIntervalRef.current = null;
+    }
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
@@ -80,8 +91,8 @@ export function useScreenLiveAPI({
       videoRef.current.srcObject = null;
       videoRef.current = null;
     }
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach((track) => {
+    if (displayStreamRef.current) {
+      displayStreamRef.current.getTracks().forEach((track) => {
         const handler = trackEndedHandlersRef.current.get(track);
         if (handler) {
           track.removeEventListener('ended', handler);
@@ -89,7 +100,7 @@ export function useScreenLiveAPI({
         }
         track.stop();
       });
-      screenStreamRef.current = null;
+      displayStreamRef.current = null;
     }
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -101,20 +112,18 @@ export function useScreenLiveAPI({
     if (!options?.preserveLostState) {
       onUpdate?.({
         captureStatus: 'inactive',
-        currentSlide: null,
-        slideTimeRemaining: null,
-        screenPrompt: '',
-        screenDetails: '',
+        audiencePrompt: '',
+        audienceDetails: '',
         sourceLabel: '',
       });
     }
   }, [onUpdate]);
 
   const connect = useCallback(async ({
-    screenStream,
+    displayStream,
     audioStream,
   }: {
-    screenStream: MediaStream;
+    displayStream: MediaStream;
     audioStream?: MediaStream | null;
   }): Promise<boolean> => {
     setIsConnecting(true);
@@ -122,9 +131,9 @@ export function useScreenLiveAPI({
     suppressTrackEndedRef.current = false;
     onUpdate?.({
       captureStatus: 'requesting',
-      screenPrompt: '',
-      screenDetails: '',
-      sourceLabel: screenStream.getVideoTracks()[0]?.label ?? '',
+      audiencePrompt: '',
+      audienceDetails: '',
+      sourceLabel: displayStream.getVideoTracks()[0]?.label ?? '',
     });
 
     try {
@@ -132,14 +141,14 @@ export function useScreenLiveAPI({
       if (!apiKey) throw new Error('API Key is missing');
       const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1alpha' } });
 
-      const sourceLabel = screenStream.getVideoTracks()[0]?.label ?? '';
-      screenStreamRef.current = screenStream;
+      const sourceLabel = displayStream.getVideoTracks()[0]?.label ?? '';
+      displayStreamRef.current = displayStream;
       audioStreamRef.current = audioStream ?? null;
       const videoElement = document.createElement('video');
       videoElement.autoplay = true;
       videoElement.muted = true;
       videoElement.playsInline = true;
-      videoElement.srcObject = screenStream;
+      videoElement.srcObject = displayStream;
       videoRef.current = videoElement;
       await videoElement.play().catch(() => {});
 
@@ -163,7 +172,7 @@ export function useScreenLiveAPI({
               return true;
             }
           }
-          registerProcessor('screen-pcm-processor', PCMProcessor);
+          registerProcessor('audience-pcm-processor', PCMProcessor);
         `;
         const blob = new Blob([workletCode], { type: 'application/javascript' });
         const url = URL.createObjectURL(blob);
@@ -172,7 +181,7 @@ export function useScreenLiveAPI({
         } finally {
           URL.revokeObjectURL(url);
         }
-        audioWorkletNode = new AudioWorkletNode(audioContext, 'screen-pcm-processor');
+        audioWorkletNode = new AudioWorkletNode(audioContext, 'audience-pcm-processor');
         source.connect(audioWorkletNode);
       }
 
@@ -181,8 +190,8 @@ export function useScreenLiveAPI({
         ? `${contextText.slice(0, MAX_CONTEXT_CHARS)}\n\n(Context truncated for session stability.)`
         : contextText;
       const systemInstruction = trimmedContext
-        ? `${getScreenBaseInstruction(mode)}\n\nUse the following project and strategy context while reasoning about the screen:\n${trimmedContext}`
-        : getScreenBaseInstruction(mode);
+        ? `${getAudienceBaseInstruction(mode)}\n\nUse the following project context while reasoning about the audience:\n${trimmedContext}`
+        : getAudienceBaseInstruction(mode);
 
       let sessionPromise: Promise<any>;
       const withOpenSession = (handler: (session: any) => void) => {
@@ -195,15 +204,15 @@ export function useScreenLiveAPI({
       const handleTrackEnded = () => {
         onUpdate?.({
           captureStatus: 'lost',
-          screenPriority: 'critical',
-          screenPrompt: 'Screen lost',
-          screenDetails: 'Screen capture stopped. Delivery coaching continues.',
+          priority: 'critical',
+          audiencePrompt: 'Audience view lost',
+          audienceDetails: 'Gallery capture stopped. Delivery coaching continues.',
           sourceLabel,
         });
         disconnect({ preserveLostState: true });
       };
 
-      screenStream.getVideoTracks().forEach((track) => {
+      displayStream.getVideoTracks().forEach((track) => {
         const wrapped = () => {
           trackEndedHandlersRef.current.delete(track);
           if (suppressTrackEndedRef.current) return;
@@ -214,7 +223,7 @@ export function useScreenLiveAPI({
       });
 
       sessionPromise = ai.live.connect({
-        model: SCREEN_LIVE_MODEL,
+        model: AUDIENCE_LIVE_MODEL,
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
@@ -230,8 +239,8 @@ export function useScreenLiveAPI({
           systemInstruction,
           tools: [{
             functionDeclarations: [{
-              name: 'updateScreenState',
-              description: 'Update the screen/navigation lane for the shared screen.',
+              name: 'updateAudienceState',
+              description: 'Update audience engagement observations from the video call gallery view.',
               behavior: Behavior.NON_BLOCKING,
               parameters: {
                 type: Type.OBJECT,
@@ -239,18 +248,34 @@ export function useScreenLiveAPI({
                   captureStatus: {
                     type: Type.STRING,
                     enum: ['inactive', 'requesting', 'active', 'lost', 'denied', 'unsupported'],
-                    description: 'Health of the current screen capture.',
+                    description: 'Health of the current audience gallery capture.',
                   },
-                  currentSlide: { type: Type.INTEGER, description: 'Current slide number when confident.' },
-                  slideTimeRemaining: { type: Type.INTEGER, description: 'Estimated seconds remaining on the current slide.' },
-                  screenPrompt: { type: Type.STRING, description: 'Short navigation or screen cue.' },
-                  screenDetails: { type: Type.STRING, description: 'Longer detail for the screen lane.' },
-                  screenPriority: {
+                  engagement: {
+                    type: Type.STRING,
+                    enum: ['high', 'moderate', 'low'],
+                    description: 'Overall audience engagement level.',
+                  },
+                  reactions: {
+                    type: Type.STRING,
+                    description: 'Observed audience reactions: confused, nodding, bored, attentive, laughing.',
+                  },
+                  handsRaised: {
+                    type: Type.INTEGER,
+                    description: 'Number of participants with raised hands.',
+                  },
+                  audiencePrompt: {
+                    type: Type.STRING,
+                    description: 'Short actionable cue for the speaker.',
+                  },
+                  audienceDetails: {
+                    type: Type.STRING,
+                    description: 'Longer context about audience state.',
+                  },
+                  priority: {
                     type: Type.STRING,
                     enum: ['info', 'watch', 'critical'],
-                    description: 'Urgency of the screen cue.',
+                    description: 'Urgency of the audience cue.',
                   },
-                  sourceLabel: { type: Type.STRING, description: 'Friendly description of the captured surface.' },
                 },
               },
             }],
@@ -265,7 +290,7 @@ export function useScreenLiveAPI({
             setIsConnecting(false);
             onUpdate?.({
               captureStatus: 'active',
-              screenPriority: 'info',
+              priority: 'info',
               sourceLabel,
             });
 
@@ -304,30 +329,53 @@ export function useScreenLiveAPI({
                   // ignore
                 }
               });
-            }, SCREEN_FRAME_INTERVAL_MS);
+            }, AUDIENCE_FRAME_INTERVAL_MS);
           },
           onmessage: (message: LiveServerMessage) => {
             if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
 
             if (message.setupComplete) {
               isSessionReadyRef.current = true;
+
+              // Kick-start observation — without this the model may not proactively call the tool.
+              withOpenSession((s) => {
+                try {
+                  s.sendClientContent({
+                    turns: [{ role: 'user', parts: [{ text: 'Audience gallery view is now visible. Begin observing. Call updateAudienceState with your initial assessment of engagement, reactions, and hands raised.' }] }],
+                    turnComplete: true,
+                  });
+                } catch { /* ignore */ }
+              });
+
+              // Periodic nudge every 15s to keep the model calling tools frequently.
+              nudgeIntervalRef.current = window.setInterval(() => {
+                withOpenSession((s) => {
+                  try {
+                    s.sendClientContent({
+                      turns: [{ role: 'user', parts: [{ text: 'Call updateAudienceState now with your current assessment of engagement, reactions, and handsRaised. Always set these indicator fields.' }] }],
+                      turnComplete: true,
+                    });
+                  } catch { /* ignore */ }
+                });
+              }, 15_000);
             }
 
             if (message.serverContent?.modelTurn) {
-              // ScreenAgent is tool-only for the app; ignore any generated content payloads.
+              // AudienceAgent is tool-only; ignore generated content payloads.
             }
 
             if (message.toolCall) {
               for (const call of message.toolCall.functionCalls) {
-                if (call.name === 'updateScreenState' && onUpdate && call.args && typeof call.args === 'object') {
+                if (call.name === 'updateAudienceState' && onUpdate && call.args && typeof call.args === 'object') {
                   const args = call.args as Record<string, unknown>;
                   onUpdate({
-                    captureStatus: typeof args.captureStatus === 'string' ? args.captureStatus as ScreenAgentUpdate['captureStatus'] : undefined,
-                    currentSlide: typeof args.currentSlide === 'number' ? args.currentSlide : undefined,
-                    slideTimeRemaining: typeof args.slideTimeRemaining === 'number' ? args.slideTimeRemaining : undefined,
-                    screenPrompt: typeof args.screenPrompt === 'string' ? args.screenPrompt : undefined,
-                    screenDetails: typeof args.screenDetails === 'string' ? args.screenDetails : undefined,
-                    screenPriority: typeof args.screenPriority === 'string' ? args.screenPriority as ScreenAgentUpdate['screenPriority'] : undefined,
+                    captureStatus: typeof args.captureStatus === 'string' ? args.captureStatus as AudienceAgentUpdate['captureStatus'] : undefined,
+                    engagement: typeof args.engagement === 'string' ? args.engagement as AudienceAgentUpdate['engagement'] : undefined,
+                    reactions: typeof args.reactions === 'string' ? args.reactions : undefined,
+                    handsRaised: typeof args.handsRaised === 'number' ? args.handsRaised : undefined,
+                    audiencePrompt: typeof args.audiencePrompt === 'string' ? args.audiencePrompt : undefined,
+                    audienceDetails: typeof args.audienceDetails === 'string' ? args.audienceDetails : undefined,
+                    priority: typeof args.priority === 'string' ? args.priority as AudienceAgentUpdate['priority'] : undefined,
                     sourceLabel: typeof args.sourceLabel === 'string' ? args.sourceLabel : sourceLabel,
                   });
                 }
@@ -353,7 +401,7 @@ export function useScreenLiveAPI({
             if (sessionRef.current !== sessionPromise) return;
             if (!isSessionReadyRef.current && event.code !== 1000) {
               const reason = event.reason?.trim();
-              setError(reason ? `Screen session closed before setup: ${reason}` : `Screen session closed before setup (code ${event.code})`);
+              setError(reason ? `Audience session closed before setup: ${reason}` : `Audience session closed before setup (code ${event.code})`);
             }
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
@@ -361,7 +409,7 @@ export function useScreenLiveAPI({
           },
           onerror: (err: any) => {
             if (sessionRef.current !== sessionPromise) return;
-            console.error('Screen Live API Error:', err);
+            console.error('Audience Live API Error:', err);
             setError(err.message || 'An error occurred');
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;

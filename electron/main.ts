@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session } from 'electron';
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { registerIpc } from './ipc.js';
@@ -157,18 +157,13 @@ function ensureTray(paths: ReturnType<typeof getElectronPaths>): void {
 }
 
 function isSquaredWindowSource(name: string): boolean {
-  return /squared|status|subtitle/i.test(name);
-}
-
-function formatDisplaySourceLabel(source: Electron.DesktopCapturerSource): string {
-  const prefix = source.id.startsWith('screen:') ? 'Screen' : 'Window';
-  return `${prefix}: ${source.name}`;
+  return /squared|status|subtitle|source picker/i.test(name);
 }
 
 async function chooseDisplaySource(parentWindow: BrowserWindow | null): Promise<Electron.DesktopCapturerSource | null> {
   const sources = await desktopCapturer.getSources({
     types: ['screen', 'window'],
-    thumbnailSize: { width: 0, height: 0 },
+    thumbnailSize: { width: 320, height: 200 },
     fetchWindowIcons: false,
   });
 
@@ -181,30 +176,67 @@ async function chooseDisplaySource(parentWindow: BrowserWindow | null): Promise<
     return null;
   }
 
-  const selectableSources = rankedSources.slice(0, 8);
-  const buttons = selectableSources.map(formatDisplaySourceLabel);
-  buttons.push('Cancel');
+  const selectableSources = rankedSources.slice(0, 9);
+  const paths = getElectronPaths();
 
-  const dialogOptions = {
-    type: 'question',
-    title: 'Choose screen for ScreenAgent',
-    message: 'Choose what ScreenAgent should watch',
-    detail: 'Pick the presentation display or a slide window. If you cancel, delivery coaching will keep running without screen analysis.',
-    buttons,
-    defaultId: 0,
-    cancelId: buttons.length - 1,
-    noLink: true,
-    normalizeAccessKeys: true,
-  } as const;
-  const result = parentWindow
-    ? await dialog.showMessageBox(parentWindow, dialogOptions)
-    : await dialog.showMessageBox(dialogOptions);
+  const pickerWindow = new BrowserWindow({
+    width: 680,
+    height: 500,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'Choose Source',
+    parent: parentWindow ?? undefined,
+    modal: Boolean(parentWindow),
+    backgroundColor: '#1e1e1e',
+    show: false,
+    webPreferences: {
+      preload: paths.preloadPath,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
 
-  if (result.response >= selectableSources.length) {
-    return null;
-  }
+  return new Promise<Electron.DesktopCapturerSource | null>((resolve) => {
+    let resolved = false;
 
-  return selectableSources[result.response] ?? null;
+    const onSelect = (_event: Electron.IpcMainEvent, sourceId: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      const selected = sourceId
+        ? selectableSources.find((s) => s.id === sourceId) ?? null
+        : null;
+      if (!pickerWindow.isDestroyed()) pickerWindow.close();
+      resolve(selected);
+    };
+
+    const cleanup = () => {
+      ipcMain.removeListener('picker:select', onSelect);
+      if (!resolved) {
+        resolved = true;
+        resolve(null);
+      }
+    };
+
+    ipcMain.once('picker:select', onSelect);
+
+    pickerWindow.on('closed', cleanup);
+
+    void pickerWindow.loadFile(paths.sourcePickerHtmlPath).then(() => {
+      const serialized = selectableSources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        thumbnail: s.thumbnail.toDataURL(),
+        type: s.id.startsWith('screen:') ? 'screen' : 'window',
+      }));
+      pickerWindow.webContents.send('picker:sources', serialized);
+      pickerWindow.show();
+    }).catch(() => {
+      cleanup();
+      if (!pickerWindow.isDestroyed()) pickerWindow.close();
+    });
+  });
 }
 
 function registerDisplayMediaHandler(): void {
@@ -226,7 +258,7 @@ function registerDisplayMediaHandler(): void {
         console.error('Failed to choose display media source', error);
         callback({});
       });
-  }, { useSystemPicker: true });
+  });
 }
 
 async function createWindows(): Promise<void> {

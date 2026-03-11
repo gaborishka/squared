@@ -29,6 +29,7 @@
         animation: fadeUp 0.25s ease-out;
       }
       .bar.visible { display: flex; }
+      .bar.fading { opacity: 0; transition: opacity 0.6s ease-out; }
 
       @keyframes fadeUp {
         from { opacity: 0; transform: translateY(8px); }
@@ -47,27 +48,13 @@
       }
       .lane.visible { display: block; }
 
-      .lane.mode-rescue {
-        border: 1px solid rgba(248,113,113,0.35);
-      }
-      .lane.mode-directive {
-        border: 1px solid rgba(251,191,36,0.3);
-      }
-      .lane.mode-soft_cue {
-        border: 1px solid rgba(52,211,153,0.25);
-      }
-      .lane.mode-monitor {
-        border: 1px solid rgba(255,255,255,0.08);
-      }
-      .lane.priority-critical {
-        border: 1px solid rgba(249,115,22,0.35);
-      }
-      .lane.priority-watch {
-        border: 1px solid rgba(16,185,129,0.3);
-      }
-      .lane.priority-info {
-        border: 1px solid rgba(255,255,255,0.08);
-      }
+      .lane.mode-rescue { border: 1px solid rgba(248,113,113,0.35); }
+      .lane.mode-directive { border: 1px solid rgba(251,191,36,0.3); }
+      .lane.mode-soft_cue { border: 1px solid rgba(52,211,153,0.25); }
+      .lane.mode-monitor { border: 1px solid rgba(255,255,255,0.08); }
+      .lane.priority-critical { border: 1px solid rgba(249,115,22,0.35); }
+      .lane.priority-watch { border: 1px solid rgba(16,185,129,0.3); }
+      .lane.priority-info { border: 1px solid rgba(255,255,255,0.08); }
 
       .eyebrow {
         font-size: 10px;
@@ -92,12 +79,16 @@
 
       .detail {
         display: none;
-        margin-top: 8px;
-        font-size: 15px;
-        line-height: 1.45;
+        margin-top: 6px;
+        font-size: 14px;
+        line-height: 1.4;
         color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
       }
-      .detail.visible { display: block; }
+      .detail.visible { display: -webkit-box; }
     </style>
   </head>
   <body>
@@ -107,10 +98,10 @@
         <div id="delivery-prompt" class="prompt"></div>
         <div id="delivery-detail" class="detail"></div>
       </div>
-      <div id="screen-lane" class="lane">
-        <div id="screen-label" class="eyebrow">Screen agent</div>
-        <div id="screen-prompt" class="prompt"></div>
-        <div id="screen-detail" class="detail"></div>
+      <div id="audience-lane" class="lane">
+        <div id="audience-label" class="eyebrow">Audience agent</div>
+        <div id="audience-prompt" class="prompt"></div>
+        <div id="audience-detail" class="detail"></div>
       </div>
     </div>
 
@@ -119,32 +110,54 @@
       const deliveryLane = document.getElementById('delivery-lane');
       const deliveryPrompt = document.getElementById('delivery-prompt');
       const deliveryDetail = document.getElementById('delivery-detail');
-      const screenLane = document.getElementById('screen-lane');
-      const screenLabel = document.getElementById('screen-label');
-      const screenPrompt = document.getElementById('screen-prompt');
-      const screenDetail = document.getElementById('screen-detail');
+      const audienceLane = document.getElementById('audience-lane');
+      const audienceLabel = document.getElementById('audience-label');
+      const audiencePrompt = document.getElementById('audience-prompt');
+      const audienceDetail = document.getElementById('audience-detail');
+
+      let dismissTimer = null;
+      const DISMISS_MS = 8000;
+
+      function startDismissTimer() {
+        if (dismissTimer) clearTimeout(dismissTimer);
+        dismissTimer = setTimeout(() => {
+          bar.classList.add('fading');
+          setTimeout(() => {
+            bar.classList.remove('visible', 'fading');
+          }, 600);
+        }, DISMISS_MS);
+      }
 
       function update(state) {
         const deliveryVisible = Boolean(state.delivery && state.delivery.visible && (state.delivery.prompt || state.delivery.detail));
-        const screenVisible = Boolean(state.screen && state.screen.visible && (state.screen.prompt || state.screen.detail));
+        const audienceVisible = Boolean(state.audience && state.audience.visible && (state.audience.prompt || state.audience.detail));
+        const shouldShow = state.visible && (deliveryVisible || audienceVisible);
 
-        bar.className = 'bar' + (state.visible && (deliveryVisible || screenVisible) ? ' visible' : '');
+        bar.classList.remove('fading');
+        bar.className = 'bar' + (shouldShow ? ' visible' : '');
 
         deliveryLane.className = 'lane' + (deliveryVisible ? ' visible mode-' + state.delivery.mode : '');
         deliveryPrompt.textContent = state.delivery?.prompt || '';
         deliveryDetail.textContent = state.delivery?.detail || '';
         deliveryDetail.className = 'detail' + (state.delivery?.detail ? ' visible' : '');
 
-        const screenTone = state.screen?.captureStatus === 'lost'
+        const audienceTone = state.audience?.captureStatus === 'lost'
           ? 'mode-rescue'
-          : 'priority-' + (state.screen?.priority || 'info');
-        screenLane.className = 'lane' + (screenVisible ? ' visible ' + screenTone : '');
-        screenLabel.textContent = state.screen?.currentSlide != null
-          ? 'Screen agent • Slide ' + state.screen.currentSlide
-          : 'Screen agent';
-        screenPrompt.textContent = state.screen?.prompt || '';
-        screenDetail.textContent = state.screen?.detail || '';
-        screenDetail.className = 'detail' + (state.screen?.detail ? ' visible' : '');
+          : 'priority-' + (state.audience?.priority || 'info');
+        audienceLane.className = 'lane' + (audienceVisible ? ' visible ' + audienceTone : '');
+        audienceLabel.textContent = state.audience?.engagement
+          ? 'Audience agent \u2022 ' + state.audience.engagement
+          : 'Audience agent';
+        audiencePrompt.textContent = state.audience?.prompt || '';
+        audienceDetail.textContent = state.audience?.detail || '';
+        audienceDetail.className = 'detail' + (state.audience?.detail ? ' visible' : '');
+
+        if (shouldShow) {
+          startDismissTimer();
+        } else if (dismissTimer) {
+          clearTimeout(dismissTimer);
+          dismissTimer = null;
+        }
       }
 
       if (window.squaredElectron?.onSubtitleState) {

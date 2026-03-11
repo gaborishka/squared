@@ -260,10 +260,10 @@ const evaluatePosture = (result: PoseLandmarkerResult): PostureResult | null => 
 
 function getDeliveryBaseInstruction(mode: 'rehearsal' | 'presentation'): string {
   if (mode === 'rehearsal') {
-    return 'You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases. You may also receive trusted [ScreenAgent] messages with important screen observations.';
+    return 'You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases.';
   }
 
-  return 'You are DebateCoach, a silent live presentation coach focused on delivery. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send concise delivery cues, agentMode, and rescue text when absolutely necessary. You may receive trusted [ScreenAgent] messages with slide/navigation observations, but your own output should stay focused on delivery.';
+  return 'You are DebateCoach, a silent live presentation coach focused on delivery. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send concise delivery cues, agentMode, and rescue text when absolutely necessary. You may receive trusted [AudienceAgent] messages with audience engagement observations, but your own output should stay focused on delivery.';
 }
 
 export function useDeliveryLiveAPI({

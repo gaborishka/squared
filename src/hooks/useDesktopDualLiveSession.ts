@@ -1,28 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDeliveryLiveAPI } from './useDeliveryLiveAPI';
-import { useScreenLiveAPI } from './useScreenLiveAPI';
+import { useAudienceLiveAPI } from './useAudienceLiveAPI';
 import {
+  DEFAULT_AUDIENCE_AGENT_STATE,
   DEFAULT_DELIVERY_AGENT_STATE,
-  DEFAULT_SCREEN_AGENT_STATE,
   composeLegacyIndicators,
   mergeDeliveryAgentState,
-  mergeScreenAgentState,
+  mergeAudienceAgentState,
 } from '../types';
 import type {
+  AudienceAgentState,
+  AudienceAgentUpdate,
   DeliveryAgentState,
   DeliveryAgentUpdate,
   GamePlan,
   ProjectAnalysis,
   ProjectDetails,
-  ScreenAgentState,
-  ScreenAgentUpdate,
   SlideAnalysisToolPayload,
 } from '../types';
 import {
   buildDeliveryContext,
-  buildScreenAgentContext,
-  formatScreenStateForDelivery,
-  shouldForwardScreenStateToDelivery,
+  buildAudienceAgentContext,
+  formatAudienceStateForDelivery,
+  shouldForwardAudienceStateToDelivery,
 } from '../lib/session';
 
 export function useDesktopDualLiveSession({
@@ -39,23 +39,23 @@ export function useDesktopDualLiveSession({
   onSlideAnalysis?: (payload: SlideAnalysisToolPayload) => void;
 }) {
   const [deliveryState, setDeliveryState] = useState<DeliveryAgentState | null>(null);
-  const [screenState, setScreenState] = useState<ScreenAgentState | null>(null);
+  const [audienceState, setAudienceState] = useState<AudienceAgentState | null>(null);
 
   const deliveryContext = useMemo(
     () => buildDeliveryContext({ mode, project, analysis, gamePlan }),
     [analysis, gamePlan, mode, project],
   );
-  const screenContext = useMemo(
-    () => buildScreenAgentContext({ mode, project, analysis, gamePlan }),
+  const audienceContext = useMemo(
+    () => buildAudienceAgentContext({ mode, project, analysis, gamePlan }),
     [analysis, gamePlan, mode, project],
   );
 
-  const previousScreenStateRef = useRef<ScreenAgentState | null>(null);
+  const previousAudienceStateRef = useRef<AudienceAgentState | null>(null);
   const handleDeliveryUpdate = useCallback((update: DeliveryAgentUpdate) => {
     setDeliveryState((previous) => mergeDeliveryAgentState(previous, update));
   }, []);
-  const handleScreenUpdate = useCallback((update: ScreenAgentUpdate) => {
-    setScreenState((previous) => mergeScreenAgentState(previous, update));
+  const handleAudienceUpdate = useCallback((update: AudienceAgentUpdate) => {
+    setAudienceState((previous) => mergeAudienceAgentState(previous, update));
   }, []);
   const handleSlideAnalysis = useCallback((payload: SlideAnalysisToolPayload) => {
     onSlideAnalysis?.(payload);
@@ -79,49 +79,54 @@ export function useDesktopDualLiveSession({
   });
 
   const {
-    isConnecting: isScreenConnecting,
-    error: screenError,
-    connect: connectScreen,
-    disconnect: disconnectScreen,
-  } = useScreenLiveAPI({
+    isConnected: isAudienceConnected,
+    isConnecting: isAudienceConnecting,
+    error: audienceError,
+    connect: connectAudienceSession,
+    disconnect: disconnectAudienceSession,
+  } = useAudienceLiveAPI({
     mode,
-    contextText: screenContext,
-    onUpdate: handleScreenUpdate,
+    contextText: audienceContext,
+    onUpdate: handleAudienceUpdate,
   });
 
   useEffect(() => {
-    if (!screenState) return;
-    if (!shouldForwardScreenStateToDelivery(previousScreenStateRef.current, screenState)) {
-      previousScreenStateRef.current = screenState;
+    if (!audienceState) return;
+    if (!shouldForwardAudienceStateToDelivery(previousAudienceStateRef.current, audienceState)) {
+      previousAudienceStateRef.current = audienceState;
       return;
     }
 
-    const note = formatScreenStateForDelivery(screenState);
-    previousScreenStateRef.current = screenState;
+    const note = formatAudienceStateForDelivery(audienceState);
+    previousAudienceStateRef.current = audienceState;
     if (note) {
       pushContextNote(note);
     }
-  }, [pushContextNote, screenState]);
+  }, [pushContextNote, audienceState]);
 
   const connect = useCallback(async (videoElement: HTMLVideoElement): Promise<boolean> => {
-    previousScreenStateRef.current = null;
-    setScreenState(DEFAULT_SCREEN_AGENT_STATE);
+    previousAudienceStateRef.current = null;
+    setAudienceState(DEFAULT_AUDIENCE_AGENT_STATE);
     const deliveryConnected = await connectDelivery(videoElement);
     if (!deliveryConnected) {
       return false;
     }
+    // Audience agent connects lazily via connectAudience() — not automatically
+    return true;
+  }, [connectDelivery]);
 
+  const connectAudience = useCallback(async (): Promise<boolean> => {
     if (!window.squaredElectron?.isElectron) {
-      return true;
+      return false;
     }
 
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setScreenState((previous) => mergeScreenAgentState(previous, {
+      setAudienceState((previous) => mergeAudienceAgentState(previous, {
         captureStatus: 'unsupported',
-        screenPrompt: '',
-        screenDetails: '',
+        audiencePrompt: '',
+        audienceDetails: '',
       }));
-      return true;
+      return false;
     }
 
     try {
@@ -136,79 +141,74 @@ export function useDesktopDualLiveSession({
       try {
         mirroredMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (audioError) {
-        console.warn('ScreenAgent microphone mirror unavailable', audioError);
+        console.warn('AudienceAgent microphone mirror unavailable', audioError);
       }
 
       if (!mirroredMicStream || mirroredMicStream.getAudioTracks().length === 0) {
         displayStream.getTracks().forEach((track) => track.stop());
         mirroredMicStream?.getTracks().forEach((track) => track.stop());
-        setScreenState((previous) => mergeScreenAgentState(previous, {
+        setAudienceState((previous) => mergeAudienceAgentState(previous, {
           captureStatus: 'inactive',
-          screenPriority: 'watch',
-          screenPrompt: 'ScreenAgent offline',
-          screenDetails: 'Could not mirror microphone audio into ScreenAgent. Delivery coaching continues.',
+          priority: 'watch',
+          audiencePrompt: 'AudienceAgent offline',
+          audienceDetails: 'Could not mirror microphone audio into AudienceAgent. Delivery coaching continues.',
         }));
-        return true;
+        return false;
       }
 
-      const screenConnected = await connectScreen({
-        screenStream: displayStream,
+      const connected = await connectAudienceSession({
+        displayStream: displayStream,
         audioStream: mirroredMicStream,
       });
-      if (!screenConnected) {
+      if (!connected) {
         displayStream.getTracks().forEach((track) => track.stop());
         mirroredMicStream.getTracks().forEach((track) => track.stop());
+        return false;
       }
       return true;
     } catch (error: any) {
       const denied = error?.name === 'NotAllowedError' || error?.message === 'Permission denied';
-      setScreenState((previous) => mergeScreenAgentState(previous, {
+      setAudienceState((previous) => mergeAudienceAgentState(previous, {
         captureStatus: denied ? 'denied' : 'inactive',
-        screenPrompt: '',
-        screenDetails: '',
+        audiencePrompt: '',
+        audienceDetails: '',
       }));
-      return true;
+      return false;
     }
-  }, [connectDelivery, connectScreen]);
+  }, [connectAudienceSession]);
+
+  const disconnectAudience = useCallback(() => {
+    disconnectAudienceSession();
+    previousAudienceStateRef.current = null;
+    setAudienceState(DEFAULT_AUDIENCE_AGENT_STATE);
+  }, [disconnectAudienceSession]);
 
   const disconnect = useCallback(() => {
-    disconnectScreen();
+    disconnectAudienceSession();
     disconnectDelivery();
-    previousScreenStateRef.current = null;
-    setScreenState(DEFAULT_SCREEN_AGENT_STATE);
-  }, [disconnectDelivery, disconnectScreen]);
-
-  const effectiveScreenState = useMemo(() => {
-    const current = screenState ?? DEFAULT_SCREEN_AGENT_STATE;
-    const deliveryCurrent = deliveryState ?? DEFAULT_DELIVERY_AGENT_STATE;
-    if (current.captureStatus === 'active' || current.captureStatus === 'lost') {
-      return current;
-    }
-
-    return {
-      ...current,
-      currentSlide: current.currentSlide ?? deliveryCurrent.fallbackCurrentSlide,
-      slideTimeRemaining: current.slideTimeRemaining ?? deliveryCurrent.fallbackSlideTimeRemaining,
-    };
-  }, [deliveryState, screenState]);
+    previousAudienceStateRef.current = null;
+    setAudienceState(DEFAULT_AUDIENCE_AGENT_STATE);
+  }, [disconnectDelivery, disconnectAudienceSession]);
 
   const legacyIndicators = useMemo(
-    () => composeLegacyIndicators(deliveryState ?? DEFAULT_DELIVERY_AGENT_STATE, effectiveScreenState),
-    [deliveryState, effectiveScreenState],
+    () => composeLegacyIndicators(deliveryState ?? DEFAULT_DELIVERY_AGENT_STATE, audienceState ?? DEFAULT_AUDIENCE_AGENT_STATE),
+    [deliveryState, audienceState],
   );
 
   return {
     isConnected: isDeliveryConnected,
-    isConnecting: isDeliveryConnecting || isScreenConnecting,
+    isConnecting: isDeliveryConnecting || isAudienceConnecting,
     isSpeaking,
-    error: deliveryError ?? screenError,
+    error: deliveryError ?? audienceError,
     connect,
     disconnect,
+    connectAudience,
+    disconnectAudience,
+    isAudienceConnected,
     analyserRef,
     playbackAnalyserRef,
     deliveryState: deliveryState ?? DEFAULT_DELIVERY_AGENT_STATE,
-    screenState: effectiveScreenState,
-    rawScreenState: screenState ?? DEFAULT_SCREEN_AGENT_STATE,
+    audienceState: audienceState ?? DEFAULT_AUDIENCE_AGENT_STATE,
     legacyIndicators,
   };
 }

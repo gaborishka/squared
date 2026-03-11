@@ -3,8 +3,8 @@ export type ProjectFileType = 'pptx' | 'pdf' | 'text' | 'md';
 export type RiskLevel = 'safe' | 'watch' | 'fragile';
 export type InterventionPolicy = 'silent' | 'soft_cue' | 'directive' | 'teleprompter';
 export type AgentMode = 'monitor' | 'soft_cue' | 'directive' | 'rescue';
-export type ScreenCaptureStatus = 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported';
-export type ScreenPriority = 'info' | 'watch' | 'critical';
+export type AudienceCaptureStatus = 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported';
+export type AudiencePriority = 'info' | 'watch' | 'critical';
 export type FeedbackSeverity = 'info' | 'warning' | 'critical';
 export type FeedbackCategory = 'pace' | 'eye_contact' | 'posture' | 'content' | 'structure' | 'filler';
 export type RiskType =
@@ -62,17 +62,18 @@ export type DeliveryAgentUpdate = Partial<Omit<DeliveryAgentState, 'fillerWords'
   fillerWords?: Partial<FillerWords>;
 };
 
-export interface ScreenAgentState {
-  captureStatus: ScreenCaptureStatus;
-  currentSlide: number | null;
-  slideTimeRemaining: number | null;
-  screenPrompt: string;
-  screenDetails: string;
-  screenPriority: ScreenPriority;
+export interface AudienceAgentState {
+  captureStatus: AudienceCaptureStatus;
+  engagement: 'high' | 'moderate' | 'low' | null;
+  reactions: string;
+  handsRaised: number | null;
+  audiencePrompt: string;
+  audienceDetails: string;
+  priority: AudiencePriority;
   sourceLabel: string;
 }
 
-export type ScreenAgentUpdate = Partial<ScreenAgentState>;
+export type AudienceAgentUpdate = Partial<AudienceAgentState>;
 
 export interface ProjectSlide {
   id: string;
@@ -278,28 +279,28 @@ export interface DeliveryCueLaneState {
   detail: string;
 }
 
-export interface ScreenCueLaneState {
+export interface AudienceCueLaneState {
   visible: boolean;
-  priority: ScreenPriority;
-  captureStatus: ScreenCaptureStatus;
+  priority: AudiencePriority;
+  captureStatus: AudienceCaptureStatus;
   prompt: string;
   detail: string;
-  currentSlide: number | null;
+  engagement: 'high' | 'moderate' | 'low' | null;
+  reactions: string;
+  handsRaised: number | null;
 }
 
 export interface DualAgentOverlayState {
   visible: boolean;
-  currentSlide: number | null;
-  slideTimeRemaining: number | null;
   delivery: DeliveryCueLaneState;
-  screen: ScreenCueLaneState;
+  audience: AudienceCueLaneState;
 }
 
 export interface PillState {
   visible: boolean;
   elapsed: string;
   currentSlide: number | null;
-  screenCaptureStatus: ScreenCaptureStatus;
+  audienceCaptureStatus: AudienceCaptureStatus;
   pace: string;
   eyeContact: string;
   posture: string;
@@ -313,7 +314,7 @@ export interface PillState {
 export interface SubtitleState {
   visible: boolean;
   delivery: DeliveryCueLaneState;
-  screen: ScreenCueLaneState;
+  audience: AudienceCueLaneState;
 }
 
 export interface DesktopAppStatus {

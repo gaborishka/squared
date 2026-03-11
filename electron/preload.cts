@@ -34,4 +34,12 @@ contextBridge.exposeInMainWorld('squaredElectron', {
 
   // App status
   setAppStatus: (status: DesktopAppStatus) => ipcRenderer.send('app-status:update', status),
+
+  // Source picker
+  onPickerSources: (listener: (sources: Array<{ id: string; name: string; thumbnail: string; type: string }>) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, sources: Array<{ id: string; name: string; thumbnail: string; type: string }>) => listener(sources);
+    ipcRenderer.on('picker:sources', handler);
+    return () => ipcRenderer.removeListener('picker:sources', handler);
+  },
+  selectPickerSource: (sourceId: string | null) => ipcRenderer.send('picker:select', sourceId),
 });

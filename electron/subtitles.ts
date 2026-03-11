@@ -4,7 +4,7 @@ import type { SubtitleState } from '../shared/types.js';
 function getSubtitleBounds() {
   const workArea = screen.getPrimaryDisplay().workArea;
   const width = Math.min(720, workArea.width - 80);
-  const height = 120;
+  const height = 180;
   return {
     width,
     height,
