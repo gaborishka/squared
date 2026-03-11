@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, session } from 'electron';
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { registerIpc } from './ipc.js';
@@ -156,9 +156,83 @@ function ensureTray(paths: ReturnType<typeof getElectronPaths>): void {
   });
 }
 
+function isSquaredWindowSource(name: string): boolean {
+  return /squared|status|subtitle/i.test(name);
+}
+
+function formatDisplaySourceLabel(source: Electron.DesktopCapturerSource): string {
+  const prefix = source.id.startsWith('screen:') ? 'Screen' : 'Window';
+  return `${prefix}: ${source.name}`;
+}
+
+async function chooseDisplaySource(parentWindow: BrowserWindow | null): Promise<Electron.DesktopCapturerSource | null> {
+  const sources = await desktopCapturer.getSources({
+    types: ['screen', 'window'],
+    thumbnailSize: { width: 0, height: 0 },
+    fetchWindowIcons: false,
+  });
+
+  const rankedSources = [
+    ...sources.filter((source) => source.id.startsWith('screen:')),
+    ...sources.filter((source) => source.id.startsWith('window:') && !isSquaredWindowSource(source.name)),
+  ];
+
+  if (rankedSources.length === 0) {
+    return null;
+  }
+
+  const selectableSources = rankedSources.slice(0, 8);
+  const buttons = selectableSources.map(formatDisplaySourceLabel);
+  buttons.push('Cancel');
+
+  const dialogOptions = {
+    type: 'question',
+    title: 'Choose screen for ScreenAgent',
+    message: 'Choose what ScreenAgent should watch',
+    detail: 'Pick the presentation display or a slide window. If you cancel, delivery coaching will keep running without screen analysis.',
+    buttons,
+    defaultId: 0,
+    cancelId: buttons.length - 1,
+    noLink: true,
+    normalizeAccessKeys: true,
+  } as const;
+  const result = parentWindow
+    ? await dialog.showMessageBox(parentWindow, dialogOptions)
+    : await dialog.showMessageBox(dialogOptions);
+
+  if (result.response >= selectableSources.length) {
+    return null;
+  }
+
+  return selectableSources[result.response] ?? null;
+}
+
+function registerDisplayMediaHandler(): void {
+  session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+    if (!request.videoRequested) {
+      callback({});
+      return;
+    }
+
+    void chooseDisplaySource(mainWindow)
+      .then((source) => {
+        if (!source) {
+          callback({});
+          return;
+        }
+        callback({ video: source });
+      })
+      .catch((error) => {
+        console.error('Failed to choose display media source', error);
+        callback({});
+      });
+  }, { useSystemPicker: true });
+}
+
 async function createWindows(): Promise<void> {
   const paths = getElectronPaths();
   const serverPort = await ensureBundledServer();
+  registerDisplayMediaHandler();
 
   mainWindow = new BrowserWindow({
     width: 1440,

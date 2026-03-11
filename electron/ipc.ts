@@ -7,6 +7,7 @@ const hiddenPill: PillState = {
   visible: false,
   elapsed: '0:00',
   currentSlide: null,
+  screenCaptureStatus: 'inactive',
   pace: '',
   eyeContact: '',
   posture: '',
@@ -19,9 +20,20 @@ const hiddenPill: PillState = {
 
 const hiddenSubtitle: SubtitleState = {
   visible: false,
-  mode: 'monitor',
-  microPrompt: '',
-  rescueText: '',
+  delivery: {
+    visible: false,
+    mode: 'monitor',
+    prompt: '',
+    detail: '',
+  },
+  screen: {
+    visible: false,
+    priority: 'info',
+    captureStatus: 'inactive',
+    prompt: '',
+    detail: '',
+    currentSlide: null,
+  },
 };
 
 export interface IpcRegistration {

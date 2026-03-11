@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Clock3, Mic, Phone, Presentation, Zap } from 'lucide-react';
 import { api } from '../api/client';
-import { useLiveAPI } from '../hooks/useLiveAPI';
+import { useDesktopDualLiveSession } from '../hooks/useDesktopDualLiveSession';
 import {
-  buildPresentationContext,
   createSessionMetricsTracker,
+  currentSlideForFeedback,
   feedbackCategoryFromMessage,
   feedbackSeverityFromAgentMode,
   formatTimestampFromStart,
@@ -12,12 +12,16 @@ import {
   mergeSlideAnalysis,
   summarizeSessionMetrics,
 } from '../lib/session';
-import { CameraOverlay } from './CameraOverlay';
+import { DualAgentOverlay } from './DualAgentOverlay';
 import { AnalyzingPulse } from './AnalyzingPulse';
-import { DesktopPresentationMode } from './DesktopPresentationMode';
-import { DEFAULT_INDICATORS, GamePlan, IndicatorData, IndicatorUpdate, ProjectDetails, indicatorToPillState, indicatorToSubtitleState, mergeIndicatorData } from '../types';
+import {
+  dualAgentToPillState,
+  dualAgentToSubtitleState,
+  GamePlan,
+  ProjectDetails,
+} from '../types';
 
-interface PresentationModeProps {
+interface DesktopPresentationModeProps {
   project: ProjectDetails;
   gamePlan: GamePlan;
   onBack: () => void;
@@ -39,19 +43,16 @@ function formatElapsed(startTime: number | null): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: PresentationModeProps) {
-  const isElectronApp = Boolean(window.squaredElectron?.isElectron);
-  if (isElectronApp) {
-    return (
-      <DesktopPresentationMode
-        project={project}
-        gamePlan={gamePlan}
-        onBack={onBack}
-        onSessionEnd={onSessionEnd}
-      />
-    );
-  }
+function screenStatusLabel(status: 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported') {
+  if (status === 'active') return 'Screen live';
+  if (status === 'requesting') return 'Waiting for source';
+  if (status === 'lost') return 'Capture lost';
+  if (status === 'denied') return 'Screen skipped';
+  if (status === 'unsupported') return 'Screen unavailable';
+  return 'Delivery only';
+}
 
+export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEnd }: DesktopPresentationModeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
@@ -68,16 +69,33 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
     new Map<number, { slideNumber: number; issues: string[]; bestPhrase: string; riskLevel: 'safe' | 'watch' | 'fragile' }>(),
   );
   const lastFeedbackMessageRef = useRef('');
+  const lastMetricsSignatureRef = useRef('');
   const sessionStartTimeRef = useRef<number | null>(null);
+  const handleToggleConnectRef = useRef<() => void>(() => {});
+  const disconnectRef = useRef<() => void>(() => {});
+  const mainWindowHiddenRef = useRef(false);
 
-  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState('0:00');
   const [mainWindowHidden, setMainWindowHidden] = useState(false);
-  const mainWindowHiddenRef = useRef(false);
-  const handleToggleConnectRef = useRef<() => void>(() => {});
 
-  const contextText = useMemo(() => buildPresentationContext(project, gamePlan), [project, gamePlan]);
+  const {
+    isConnected,
+    isConnecting,
+    error,
+    connect,
+    disconnect,
+    deliveryState,
+    screenState,
+    legacyIndicators,
+  } = useDesktopDualLiveSession({
+    mode: 'presentation',
+    project,
+    gamePlan,
+    onSlideAnalysis: (payload) => {
+      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
+    },
+  });
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
@@ -102,49 +120,20 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-    } catch (error) {
-      console.warn('Could not get preview stream', error);
+    } catch (previewError) {
+      console.warn('Could not get preview stream', previewError);
     }
   }, []);
-
-  const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
-    setIndicators((previous) => {
-      const next = mergeIndicatorData(previous, update);
-      ingestIndicatorSample(metricsTrackerRef.current, next);
-
-      const feedbackMessage = update.feedbackMessage?.trim();
-      if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
-        lastFeedbackMessageRef.current = feedbackMessage;
-        feedbackPayloadRef.current.unshift({
-          id: crypto.randomUUID(),
-          timestamp: formatTimestampFromStart(sessionStartTimeRef.current),
-          message: feedbackMessage,
-          slideNumber: next.currentSlide,
-          severity: feedbackSeverityFromAgentMode(next.agentMode),
-          category: feedbackCategoryFromMessage(feedbackMessage),
-        });
-      }
-
-      return next;
-    });
-  }, []);
-
-  const { isConnected, isConnecting, error, connect, disconnect } = useLiveAPI({
-    mode: 'presentation',
-    contextText,
-    onIndicatorsUpdate: handleIndicatorsUpdate,
-    onSlideAnalysis: (payload) => {
-      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
-    },
-  });
 
   useEffect(() => {
     liveSessionActiveRef.current = isConnected || isConnecting;
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
-    return () => stopPreview();
-  }, [stopPreview]);
+    disconnectRef.current = disconnect;
+  }, [disconnect]);
+
+  useEffect(() => () => stopPreview(), [stopPreview]);
 
   useEffect(() => {
     if (isConnected || isConnecting) {
@@ -154,9 +143,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
     void startPreview();
   }, [isConnected, isConnecting, startPreview, stopPreview]);
 
-  useEffect(() => {
-    return () => disconnect();
-  }, [disconnect]);
+  useEffect(() => () => disconnectRef.current(), []);
 
   useEffect(() => {
     if (isConnected) {
@@ -165,6 +152,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
       feedbackPayloadRef.current = [];
       slideAnalysisMapRef.current = new Map();
       lastFeedbackMessageRef.current = '';
+      lastMetricsSignatureRef.current = '';
       setSessionStartTime(now);
       sessionStartTimeRef.current = now;
     } else if (!isConnecting) {
@@ -173,7 +161,34 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
     }
   }, [isConnected, isConnecting]);
 
-  // Elapsed timer
+  useEffect(() => {
+    const metricsSignature = [
+      legacyIndicators.paceWpm ?? '',
+      legacyIndicators.confidenceScore,
+      legacyIndicators.overallScore,
+      legacyIndicators.fillerWords.total,
+      legacyIndicators.eyeContact,
+      legacyIndicators.posture,
+    ].join('|');
+    if (metricsSignature !== lastMetricsSignatureRef.current) {
+      lastMetricsSignatureRef.current = metricsSignature;
+      ingestIndicatorSample(metricsTrackerRef.current, legacyIndicators);
+    }
+
+    const feedbackMessage = deliveryState.feedbackMessage.trim();
+    if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
+      lastFeedbackMessageRef.current = feedbackMessage;
+      feedbackPayloadRef.current.unshift({
+        id: crypto.randomUUID(),
+        timestamp: formatTimestampFromStart(sessionStartTimeRef.current),
+        message: feedbackMessage,
+        slideNumber: currentSlideForFeedback(deliveryState, screenState),
+        severity: feedbackSeverityFromAgentMode(deliveryState.agentMode),
+        category: feedbackCategoryFromMessage(feedbackMessage),
+      });
+    }
+  }, [deliveryState, legacyIndicators, screenState]);
+
   useEffect(() => {
     if (!isConnected || !sessionStartTimeRef.current) return;
     const tick = () => setElapsed(formatElapsed(sessionStartTimeRef.current));
@@ -184,25 +199,19 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
 
   useEffect(() => {
     if (window.squaredElectron?.setAppStatus) {
-      if (isConnected) {
-        window.squaredElectron.setAppStatus({ mode: 'presentation', connected: true });
-      } else if (isConnecting) {
-        window.squaredElectron.setAppStatus({ mode: 'presentation', connected: false });
-      } else {
-        window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
-      }
+      if (isConnected) window.squaredElectron.setAppStatus({ mode: 'presentation', connected: true });
+      else if (isConnecting) window.squaredElectron.setAppStatus({ mode: 'presentation', connected: false });
+      else window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
     }
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
     if (!window.squaredElectron) return;
-    if (window.squaredElectron.updatePill) {
-      window.squaredElectron.updatePill(indicatorToPillState(indicators, elapsed));
-    }
-    if (window.squaredElectron.updateSubtitles) {
-      window.squaredElectron.updateSubtitles(indicatorToSubtitleState(indicators));
-    }
-  }, [indicators, elapsed]);
+    window.squaredElectron.updatePill(
+      dualAgentToPillState(deliveryState, screenState, elapsed, isConnected || isConnecting),
+    );
+    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, screenState));
+  }, [deliveryState, elapsed, isConnected, isConnecting, screenState]);
 
   useEffect(() => {
     return () => {
@@ -228,8 +237,8 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
       window.squaredElectron?.clearOverlay?.();
       if (mainWindowHiddenRef.current) {
         window.squaredElectron?.showMainWindow?.();
-        setMainWindowHidden(false);
         mainWindowHiddenRef.current = false;
+        setMainWindowHidden(false);
       }
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
@@ -255,23 +264,20 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
 
     if (videoRef.current) {
       stopPreview();
-      connect(videoRef.current);
+      await connect(videoRef.current);
     }
   };
 
   handleToggleConnectRef.current = handleToggleConnect;
 
-  const currentSegment = indicators?.currentSlide != null
-    ? gamePlan.segments.find((segment) => segment.slideNumber === indicators.currentSlide)
+  const currentSegment = legacyIndicators.currentSlide != null
+    ? gamePlan.segments.find((segment) => segment.slideNumber === legacyIndicators.currentSlide)
     : null;
-
-  const fillerCount = indicators?.fillerWords?.total ?? 0;
+  const fillerCount = legacyIndicators.fillerWords.total ?? 0;
   const prioritySlides = gamePlan.attentionBudget.prioritySlides;
-  const data = indicators ?? DEFAULT_INDICATORS;
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
-      {/* Header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60 shrink-0">
         <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
           <ArrowLeft className="w-4 h-4" />
@@ -291,12 +297,10 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
       </header>
 
       <main className="flex-1 flex gap-0 min-h-0">
-        {/* Video area */}
         <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          {indicators && <CameraOverlay data={indicators} variant="presentation" />}
+          {isConnected && <DualAgentOverlay delivery={deliveryState} screen={screenState} variant="presentation" />}
 
-          {/* Control bar */}
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
             {isConnected && (
               <div className="flex items-center gap-1.5 px-3 text-xs text-zinc-400 tabular-nums">
@@ -324,7 +328,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                 </>
               )}
             </button>
-            {isConnected && isElectronApp && !mainWindowHidden && (
+            {isConnected && !mainWindowHidden && (
               <button
                 onClick={() => {
                   window.squaredElectron?.hideMainWindow?.();
@@ -346,56 +350,62 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
           )}
         </section>
 
-        {/* Right panel */}
-        <aside className="w-[280px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
+        <aside className="w-[300px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
           {isConnected ? (
-            /* ──── Live session panel ──── */
             <>
-              {/* Current slide context */}
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <div className="flex items-center justify-between">
                   <p className="text-[10px] uppercase tracking-wider text-zinc-600">Current slide</p>
-                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded capitalize ${agentModeColor(data.agentMode)}`}>
-                    {data.agentMode}
+                  <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded capitalize ${agentModeColor(deliveryState.agentMode)}`}>
+                    {deliveryState.agentMode}
                   </span>
                 </div>
                 <div className="mt-1.5 flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-zinc-100 tabular-nums">{data.currentSlide ?? '—'}</span>
+                  <span className="text-2xl font-bold text-zinc-100 tabular-nums">{legacyIndicators.currentSlide ?? '—'}</span>
                   {currentSegment && (
                     <span className="text-sm text-zinc-400 truncate">{currentSegment.slideTitle}</span>
                   )}
                 </div>
-                {data.slideTimeRemaining != null && (
+                {legacyIndicators.slideTimeRemaining != null && (
                   <div className="mt-2 flex items-center gap-2">
                     <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
                       <div
-                        className={`h-full transition-all duration-700 ${data.slideTimeRemaining < 15 ? 'bg-amber-400' : 'bg-emerald-400'}`}
-                        style={{ width: `${Math.max(5, Math.min(100, (data.slideTimeRemaining / 90) * 100))}%` }}
+                        className={`h-full transition-all duration-700 ${legacyIndicators.slideTimeRemaining < 15 ? 'bg-amber-400' : 'bg-emerald-400'}`}
+                        style={{ width: `${Math.max(5, Math.min(100, (legacyIndicators.slideTimeRemaining / 90) * 100))}%` }}
                       />
                     </div>
-                    <span className="text-[11px] text-zinc-500 tabular-nums">{Math.max(0, data.slideTimeRemaining)}s</span>
+                    <span className="text-[11px] text-zinc-500 tabular-nums">{Math.max(0, legacyIndicators.slideTimeRemaining)}s</span>
                   </div>
                 )}
               </div>
 
-              {/* Live cue */}
-              {(data.microPrompt || data.rescueText) && (
-                <div className="px-4 py-3 border-b border-zinc-800/40">
-                  <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Live cue</p>
-                  {data.microPrompt && (
-                    <p className="text-sm font-semibold text-zinc-200">{data.microPrompt}</p>
-                  )}
-                  {data.rescueText && (
-                    <p className="text-xs text-indigo-300 mt-1 leading-relaxed bg-indigo-500/10 rounded-lg px-2.5 py-2">{data.rescueText}</p>
-                  )}
-                </div>
-              )}
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Delivery lane</p>
+                <p className="text-sm font-semibold text-zinc-200">{deliveryState.microPrompt || 'Monitoring delivery'}</p>
+                {(deliveryState.rescueText || deliveryState.feedbackMessage) && (
+                  <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">{deliveryState.rescueText || deliveryState.feedbackMessage}</p>
+                )}
+              </div>
 
-              {/* Quick metrics */}
+              <div className="px-4 py-3 border-b border-zinc-800/40">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] uppercase tracking-wider text-zinc-600">Screen lane</p>
+                  <span className="text-[10px] text-zinc-500">{screenStatusLabel(screenState.captureStatus)}</span>
+                </div>
+                <p className="text-sm font-semibold text-zinc-200">
+                  {screenState.screenPrompt || (screenState.captureStatus === 'active' ? 'Watching slides' : 'Delivery-only fallback')}
+                </p>
+                {(screenState.screenDetails || screenState.sourceLabel) && (
+                  <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
+                    {screenState.screenDetails || screenState.sourceLabel}
+                  </p>
+                )}
+              </div>
+
               <div className="px-4 py-3 border-b border-zinc-800/40 grid grid-cols-3 gap-2">
                 <div>
                   <p className="text-[10px] text-zinc-600">Score</p>
-                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{data.overallScore > 0 ? data.overallScore : '—'}</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{legacyIndicators.overallScore > 0 ? legacyIndicators.overallScore : '—'}</p>
                 </div>
                 <div>
                   <p className="text-[10px] text-zinc-600">Fillers</p>
@@ -403,11 +413,10 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                 </div>
                 <div>
                   <p className="text-[10px] text-zinc-600">Confidence</p>
-                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{data.confidenceScore > 0 ? data.confidenceScore : '—'}</p>
+                  <p className="text-lg font-bold text-zinc-200 tabular-nums">{legacyIndicators.confidenceScore > 0 ? legacyIndicators.confidenceScore : '—'}</p>
                 </div>
               </div>
 
-              {/* Current segment details */}
               {currentSegment && currentSegment.knownIssues.length > 0 && (
                 <div className="px-4 py-3 border-b border-zinc-800/40">
                   <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Watch for</p>
@@ -417,15 +426,6 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                 </div>
               )}
 
-              {/* Latest feedback */}
-              {data.feedbackMessage && (
-                <div className="px-4 py-3 border-b border-zinc-800/40">
-                  <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-1.5">Feedback</p>
-                  <p className="text-xs text-zinc-300 leading-relaxed">{data.feedbackMessage}</p>
-                </div>
-              )}
-
-              {/* Plan summary — bottom */}
               <div className="mt-auto px-4 py-3 border-t border-zinc-800/40 bg-zinc-950/30">
                 <div className="flex items-center justify-between text-[10px] text-zinc-600">
                   <span>{gamePlan.attentionBudget.maxInterventions} max cues</span>
@@ -439,15 +439,13 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
               </div>
             </>
           ) : isConnecting ? (
-            /* ──── Connecting state ──── */
             <div className="flex-1 flex items-center justify-center">
               <AnalyzingPulse />
             </div>
           ) : (
-            /* ──── Pre-session state ──── */
             <>
               <div className="px-4 py-3 border-b border-zinc-800/40">
-                <p className="text-[10px] uppercase tracking-wider text-zinc-600">Game plan</p>
+                <p className="text-[10px] uppercase tracking-wider text-zinc-600">Dual session</p>
                 <p className="text-sm font-medium text-zinc-300 mt-1">{project.name}</p>
               </div>
 
@@ -465,25 +463,11 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <div className="flex items-center gap-2 mb-2">
                   <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                  <p className="text-xs font-medium text-zinc-300">
-                    {gamePlan.attentionBudget.maxInterventions} intervention{gamePlan.attentionBudget.maxInterventions !== 1 ? 's' : ''} allowed
-                  </p>
+                  <p className="text-xs font-medium text-zinc-300">Delivery + screen</p>
                 </div>
-                <p className="text-xs text-zinc-500">
-                  {prioritySlides.length > 0
-                    ? `Focus slides: ${prioritySlides.join(', ')}`
-                    : 'No priority hotspots'}
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Start will request a screen or window for ScreenAgent. If you cancel, delivery coaching still runs.
                 </p>
-              </div>
-
-              <div className="px-4 py-3 border-b border-zinc-800/40">
-                <div className="flex items-center gap-2 mb-2">
-                  <Clock3 className="w-3.5 h-3.5 text-sky-400" />
-                  <p className="text-xs font-medium text-zinc-300">
-                    Target: {gamePlan.timingStrategy.totalTargetMinutes}m total
-                  </p>
-                </div>
-                <p className="text-xs text-zinc-500">{project.slideCount} slides</p>
               </div>
 
               <div className="flex-1 flex flex-col justify-end px-4 py-4">
@@ -492,7 +476,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                   <div>
                     <p className="text-xs text-zinc-300 font-medium">Silent coach ready</p>
                     <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
-                      AI will monitor silently and show cues on the HUD overlay. No audio interruptions.
+                      DeliveryAgent and ScreenAgent will run side-by-side in the desktop overlay.
                     </p>
                   </div>
                 </div>

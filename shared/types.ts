@@ -3,6 +3,8 @@ export type ProjectFileType = 'pptx' | 'pdf' | 'text' | 'md';
 export type RiskLevel = 'safe' | 'watch' | 'fragile';
 export type InterventionPolicy = 'silent' | 'soft_cue' | 'directive' | 'teleprompter';
 export type AgentMode = 'monitor' | 'soft_cue' | 'directive' | 'rescue';
+export type ScreenCaptureStatus = 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported';
+export type ScreenPriority = 'info' | 'watch' | 'critical';
 export type FeedbackSeverity = 'info' | 'warning' | 'critical';
 export type FeedbackCategory = 'pace' | 'eye_contact' | 'posture' | 'content' | 'structure' | 'filler';
 export type RiskType =
@@ -38,6 +40,39 @@ export interface IndicatorData {
 export type IndicatorUpdate = Partial<Omit<IndicatorData, 'fillerWords'>> & {
   fillerWords?: Partial<FillerWords>;
 };
+
+export interface DeliveryAgentState {
+  pace: string;
+  paceWpm: number | null;
+  eyeContact: string;
+  posture: string;
+  fillerWords: FillerWords;
+  feedbackMessage: string;
+  confidenceScore: number;
+  volumeLevel: string;
+  overallScore: number;
+  microPrompt: string;
+  rescueText: string;
+  agentMode: AgentMode;
+  fallbackCurrentSlide: number | null;
+  fallbackSlideTimeRemaining: number | null;
+}
+
+export type DeliveryAgentUpdate = Partial<Omit<DeliveryAgentState, 'fillerWords'>> & {
+  fillerWords?: Partial<FillerWords>;
+};
+
+export interface ScreenAgentState {
+  captureStatus: ScreenCaptureStatus;
+  currentSlide: number | null;
+  slideTimeRemaining: number | null;
+  screenPrompt: string;
+  screenDetails: string;
+  screenPriority: ScreenPriority;
+  sourceLabel: string;
+}
+
+export type ScreenAgentUpdate = Partial<ScreenAgentState>;
 
 export interface ProjectSlide {
   id: string;
@@ -198,10 +233,35 @@ export interface OverlayState {
   currentSlide: number | null;
 }
 
+export interface DeliveryCueLaneState {
+  visible: boolean;
+  mode: AgentMode;
+  prompt: string;
+  detail: string;
+}
+
+export interface ScreenCueLaneState {
+  visible: boolean;
+  priority: ScreenPriority;
+  captureStatus: ScreenCaptureStatus;
+  prompt: string;
+  detail: string;
+  currentSlide: number | null;
+}
+
+export interface DualAgentOverlayState {
+  visible: boolean;
+  currentSlide: number | null;
+  slideTimeRemaining: number | null;
+  delivery: DeliveryCueLaneState;
+  screen: ScreenCueLaneState;
+}
+
 export interface PillState {
   visible: boolean;
   elapsed: string;
   currentSlide: number | null;
+  screenCaptureStatus: ScreenCaptureStatus;
   pace: string;
   eyeContact: string;
   posture: string;
@@ -214,9 +274,8 @@ export interface PillState {
 
 export interface SubtitleState {
   visible: boolean;
-  mode: AgentMode;
-  microPrompt: string;
-  rescueText: string;
+  delivery: DeliveryCueLaneState;
+  screen: ScreenCueLaneState;
 }
 
 export interface DesktopAppStatus {

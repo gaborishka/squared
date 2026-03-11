@@ -1,10 +1,12 @@
 import type {
   AgentMode,
+  DeliveryAgentState,
   GamePlan,
   IndicatorData,
   ProjectAnalysis,
   ProjectDetails,
   RunFeedback,
+  ScreenAgentState,
   SlideAnalysisToolPayload,
 } from '../types';
 
@@ -211,4 +213,130 @@ export function buildPresentationContext(project: ProjectDetails, gamePlan: Game
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+export function buildDeliveryContext(options: {
+  mode: 'rehearsal' | 'presentation';
+  project: ProjectDetails;
+  analysis?: ProjectAnalysis | null;
+  gamePlan?: GamePlan | null;
+}): string {
+  const base = options.mode === 'rehearsal'
+    ? buildRehearsalContext(options.project, options.analysis ?? null)
+    : buildPresentationContext(options.project, options.gamePlan ?? options.analysis?.latestGamePlan ?? {
+      id: 'fallback',
+      projectId: options.project.id,
+      runCount: 0,
+      createdAt: '',
+      overview: { totalRuns: 0, avgScore: 0, trend: 'stable' },
+      segments: [],
+      attentionBudget: { maxInterventions: 0, prioritySlides: [] },
+      timingStrategy: { totalTargetMinutes: 0, perSlideTargets: {} },
+    });
+
+  return [
+    base,
+    'Screen agent coordination:',
+    '- You may receive trusted user messages prefixed with "[ScreenAgent]" that summarize what is happening on the shared screen.',
+    '- Treat those messages as reliable screen observations.',
+    '- In rehearsal mode, you may speak important screen-originated issues aloud if they matter for recovery.',
+    '- In presentation mode, stay silent and adapt only your delivery lane cues.',
+  ].join('\n\n');
+}
+
+export function buildScreenAgentContext(options: {
+  mode: 'rehearsal' | 'presentation';
+  project: ProjectDetails;
+  analysis?: ProjectAnalysis | null;
+  gamePlan?: GamePlan | null;
+}): string {
+  const timingPlan = options.gamePlan ?? options.analysis?.latestGamePlan ?? null;
+  const timingSummary = timingPlan
+    ? timingPlan.segments
+        .map((segment) => `Slide ${segment.slideNumber}: ${timingPlan.timingStrategy.perSlideTargets[segment.slideNumber] ?? 'n/a'}s target`)
+        .join('\n')
+    : 'No timing targets available yet.';
+
+  const riskSummary = options.analysis?.riskSegments.length
+    ? options.analysis.riskSegments
+        .slice(0, 8)
+        .map((segment) => `Slide ${segment.slideNumber ?? '?'}: ${segment.notes || segment.riskType}`)
+        .join('\n')
+    : 'No repeated screen-side risks recorded yet.';
+
+  return [
+    `Project name: ${options.project.name}`,
+    options.project.description ? `Project description: ${options.project.description}` : '',
+    'Presentation structure:',
+    buildSlideOutline(options.project),
+    'Timing targets:',
+    timingSummary,
+    'Known weak spots:',
+    riskSummary,
+    'Instructions:',
+    '- You observe only the shared screen.',
+    '- Your only outward action should be updateScreenState; do not narrate, chat, or coach directly.',
+    '- Use updateScreenState to report currentSlide, slideTimeRemaining, capture health, and concise screen/navigation guidance.',
+    '- Detect wrong window, stalls, transitions, or lost capture when possible.',
+    '- Keep screenPrompt short and action-oriented. Put extra context in screenDetails.',
+    '- Use currentSlide only when you are reasonably confident. Leave it empty when uncertain.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+export function formatScreenStateForDelivery(state: ScreenAgentState): string | null {
+  if (state.captureStatus === 'inactive' || state.captureStatus === 'unsupported' || state.captureStatus === 'denied') {
+    return null;
+  }
+
+  const parts = ['[ScreenAgent]'];
+  parts.push(`capture=${state.captureStatus}`);
+  if (state.currentSlide != null) parts.push(`slide=${state.currentSlide}`);
+  if (state.slideTimeRemaining != null) parts.push(`slide_time_remaining=${state.slideTimeRemaining}s`);
+  if (state.screenPrompt) parts.push(`prompt="${state.screenPrompt}"`);
+  if (state.screenDetails) parts.push(`details="${state.screenDetails}"`);
+  if (state.sourceLabel) parts.push(`source="${state.sourceLabel}"`);
+  parts.push(`priority=${state.screenPriority}`);
+  return parts.join(' | ');
+}
+
+export function shouldForwardScreenStateToDelivery(
+  previous: ScreenAgentState | null,
+  next: ScreenAgentState,
+): boolean {
+  const timingBucket = (value: number | null) => {
+    if (value == null) return null;
+    if (value <= 5) return 5;
+    if (value <= 15) return 15;
+    if (value <= 30) return 30;
+    return Math.floor(value / 30) * 30;
+  };
+
+  if (!previous) {
+    return Boolean(
+      next.currentSlide != null
+      || next.screenPrompt
+      || next.screenDetails
+      || next.captureStatus === 'active'
+      || next.captureStatus === 'lost',
+    );
+  }
+
+  return (
+    previous.captureStatus !== next.captureStatus
+    || previous.currentSlide !== next.currentSlide
+    || timingBucket(previous.slideTimeRemaining) !== timingBucket(next.slideTimeRemaining)
+    || previous.screenPrompt !== next.screenPrompt
+    || previous.screenDetails !== next.screenDetails
+    || previous.screenPriority !== next.screenPriority
+    || previous.sourceLabel !== next.sourceLabel
+  );
+}
+
+export function currentSlideForFeedback(delivery: DeliveryAgentState, screen: ScreenAgentState | null): number | null {
+  if (screen && (screen.captureStatus === 'active' || screen.captureStatus === 'lost') && screen.currentSlide != null) {
+    return screen.currentSlide;
+  }
+  return delivery.fallbackCurrentSlide;
 }

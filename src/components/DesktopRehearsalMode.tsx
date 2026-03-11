@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, AlertCircle, Mic, Video, Phone, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AlertCircle, ArrowLeft, Mic, Phone, Presentation, Sparkles, Video } from 'lucide-react';
 import { api } from '../api/client';
-import { useLiveAPI } from '../hooks/useLiveAPI';
+import { useDesktopDualLiveSession } from '../hooks/useDesktopDualLiveSession';
 import {
-  buildRehearsalContext,
   createSessionMetricsTracker,
+  currentSlideForFeedback,
   feedbackCategoryFromMessage,
   feedbackSeverityFromAgentMode,
   formatTimestampFromStart,
@@ -12,21 +12,36 @@ import {
   mergeSlideAnalysis,
   summarizeSessionMetrics,
 } from '../lib/session';
-import { CameraOverlay } from './CameraOverlay';
+import { DualAgentOverlay } from './DualAgentOverlay';
 import { SessionInsights } from './SessionInsights';
 import { AnalyzingPulse } from './AnalyzingPulse';
-import { DesktopRehearsalMode } from './DesktopRehearsalMode';
-import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, ProjectAnalysis, ProjectDetails, mergeIndicatorData } from '../types';
+import { ProjectAnalysis, ProjectDetails, dualAgentToPillState, dualAgentToSubtitleState } from '../types';
 import type { FeedbackItem } from './FeedbackTimeline';
 
-interface RehearsalModeProps {
+interface DesktopRehearsalModeProps {
   project: ProjectDetails;
+  analysis: ProjectAnalysis | null;
+  analysisLoading: boolean;
   onBack: () => void;
   onSessionEnd: () => void;
 }
 
-export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModeProps) {
-  const isElectronApp = Boolean(window.squaredElectron?.isElectron);
+function screenStatusLabel(status: 'inactive' | 'requesting' | 'active' | 'lost' | 'denied' | 'unsupported') {
+  if (status === 'active') return 'Screen live';
+  if (status === 'requesting') return 'Waiting for source';
+  if (status === 'lost') return 'Capture lost';
+  if (status === 'denied') return 'Screen skipped';
+  if (status === 'unsupported') return 'Screen unavailable';
+  return 'Delivery only';
+}
+
+export function DesktopRehearsalMode({
+  project,
+  analysis,
+  analysisLoading,
+  onBack,
+  onSessionEnd,
+}: DesktopRehearsalModeProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const liveSessionActiveRef = useRef(false);
@@ -43,47 +58,40 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     new Map<number, { slideNumber: number; issues: string[]; bestPhrase: string; riskLevel: 'safe' | 'watch' | 'fragile' }>(),
   );
   const lastFeedbackMessageRef = useRef('');
+  const lastMetricsSignatureRef = useRef('');
   const sessionStartTimeRef = useRef<number | null>(null);
+  const handleToggleConnectRef = useRef<() => void>(() => {});
+  const disconnectRef = useRef<() => void>(() => {});
+  const mainWindowHiddenRef = useRef(false);
 
-  const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
-  const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(true);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState('0:00');
+  const [mainWindowHidden, setMainWindowHidden] = useState(false);
+  const riskCount = analysisLoading ? '-' : (analysis?.riskSegments.length ?? 0);
+  const runCount = analysisLoading ? '-' : (analysis?.rehearsalRuns ?? 0);
+  const hasRisks = !analysisLoading && (analysis?.riskSegments.length ?? 0) > 0;
 
-  useEffect(() => {
-    let isActive = true;
-    setAnalysisLoading(true);
-    api.getProjectAnalysis(project.id)
-      .then((result) => {
-        if (isActive) setAnalysis(result);
-      })
-      .catch((error) => {
-        console.warn('Failed to load project analysis for rehearsal context', error);
-        if (isActive) setAnalysis(null);
-      })
-      .finally(() => {
-        if (isActive) setAnalysisLoading(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [project.id]);
-
-  if (isElectronApp) {
-    return (
-      <DesktopRehearsalMode
-        project={project}
-        analysis={analysis}
-        analysisLoading={analysisLoading}
-        onBack={onBack}
-        onSessionEnd={onSessionEnd}
-      />
-    );
-  }
-
-  const contextText = useMemo(() => buildRehearsalContext(project, analysis), [project, analysis]);
+  const {
+    isConnected,
+    isConnecting,
+    error,
+    connect,
+    disconnect,
+    analyserRef,
+    isSpeaking,
+    deliveryState,
+    screenState,
+    legacyIndicators,
+  } = useDesktopDualLiveSession({
+    mode: 'rehearsal',
+    project,
+    analysis,
+    gamePlan: analysis?.latestGamePlan ?? null,
+    onSlideAnalysis: (payload) => {
+      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
+    },
+  });
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
@@ -108,64 +116,20 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-    } catch (error) {
-      console.warn('Could not get preview stream', error);
+    } catch (previewError) {
+      console.warn('Could not get preview stream', previewError);
     }
   }, []);
-
-  const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
-    setIndicators((previous) => {
-      const next = mergeIndicatorData(previous, update);
-      ingestIndicatorSample(metricsTrackerRef.current, next);
-
-      const feedbackMessage = update.feedbackMessage?.trim();
-      if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
-        lastFeedbackMessageRef.current = feedbackMessage;
-        const timestamp = formatTimestampFromStart(sessionStartTimeRef.current);
-        const feedbackEntry: FeedbackItem = {
-          id: crypto.randomUUID(),
-          timestamp,
-          message: feedbackMessage,
-        };
-
-        feedbackPayloadRef.current.unshift({
-          ...feedbackEntry,
-          slideNumber: next.currentSlide,
-          severity: feedbackSeverityFromAgentMode(next.agentMode),
-          category: feedbackCategoryFromMessage(feedbackMessage),
-        });
-        setFeedbackHistory((current) => [feedbackEntry, ...current]);
-      }
-
-      return next;
-    });
-  }, []);
-
-  const {
-    isConnected,
-    isConnecting,
-    error,
-    connect,
-    disconnect,
-    analyserRef,
-    playbackAnalyserRef,
-    isSpeaking,
-  } = useLiveAPI({
-    mode: 'rehearsal',
-    contextText,
-    onIndicatorsUpdate: handleIndicatorsUpdate,
-    onSlideAnalysis: (payload) => {
-      slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
-    },
-  });
 
   useEffect(() => {
     liveSessionActiveRef.current = isConnected || isConnecting;
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
-    return () => stopPreview();
-  }, [stopPreview]);
+    disconnectRef.current = disconnect;
+  }, [disconnect]);
+
+  useEffect(() => () => stopPreview(), [stopPreview]);
 
   useEffect(() => {
     if (isConnected || isConnecting) {
@@ -175,50 +139,110 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     void startPreview();
   }, [isConnected, isConnecting, startPreview, stopPreview]);
 
-  useEffect(() => {
-    return () => disconnect();
-  }, [disconnect]);
-
-  const resetSessionState = useCallback(() => {
-    const now = Date.now();
-    metricsTrackerRef.current = createSessionMetricsTracker();
-    feedbackPayloadRef.current = [];
-    slideAnalysisMapRef.current = new Map();
-    lastFeedbackMessageRef.current = '';
-    setIndicators(null);
-    setFeedbackHistory([]);
-    setSessionStartTime(now);
-    sessionStartTimeRef.current = now;
-  }, []);
+  useEffect(() => () => disconnectRef.current(), []);
 
   useEffect(() => {
     if (isConnected) {
-      resetSessionState();
+      const now = Date.now();
+      metricsTrackerRef.current = createSessionMetricsTracker();
+      feedbackPayloadRef.current = [];
+      slideAnalysisMapRef.current = new Map();
+      lastFeedbackMessageRef.current = '';
+      lastMetricsSignatureRef.current = '';
+      setFeedbackHistory([]);
+      setSessionStartTime(now);
+      sessionStartTimeRef.current = now;
     } else if (!isConnecting) {
       setSessionStartTime(null);
       sessionStartTimeRef.current = null;
     }
-  }, [isConnected, isConnecting, resetSessionState]);
+  }, [isConnected, isConnecting]);
+
+  useEffect(() => {
+    const metricsSignature = [
+      legacyIndicators.paceWpm ?? '',
+      legacyIndicators.confidenceScore,
+      legacyIndicators.overallScore,
+      legacyIndicators.fillerWords.total,
+      legacyIndicators.eyeContact,
+      legacyIndicators.posture,
+    ].join('|');
+    if (metricsSignature !== lastMetricsSignatureRef.current) {
+      lastMetricsSignatureRef.current = metricsSignature;
+      ingestIndicatorSample(metricsTrackerRef.current, legacyIndicators);
+    }
+
+    const feedbackMessage = deliveryState.feedbackMessage.trim();
+    if (feedbackMessage && feedbackMessage !== lastFeedbackMessageRef.current) {
+      lastFeedbackMessageRef.current = feedbackMessage;
+      const timestamp = formatTimestampFromStart(sessionStartTimeRef.current);
+      const feedbackEntry: FeedbackItem = {
+        id: crypto.randomUUID(),
+        timestamp,
+        message: feedbackMessage,
+      };
+
+      feedbackPayloadRef.current.unshift({
+        ...feedbackEntry,
+        slideNumber: currentSlideForFeedback(deliveryState, screenState),
+        severity: feedbackSeverityFromAgentMode(deliveryState.agentMode),
+        category: feedbackCategoryFromMessage(feedbackMessage),
+      });
+      setFeedbackHistory((current) => [feedbackEntry, ...current]);
+    }
+  }, [deliveryState, legacyIndicators, screenState]);
+
+  useEffect(() => {
+    if (!isConnected || !sessionStartTimeRef.current) return;
+    const tick = () => setElapsed(formatTimestampFromStart(sessionStartTimeRef.current));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isConnected]);
 
   useEffect(() => {
     if (window.squaredElectron?.setAppStatus) {
-      if (isConnected) {
-        window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: true });
-      } else if (isConnecting) {
-        window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: false });
-      } else {
-        window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
-      }
+      if (isConnected) window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: true });
+      else if (isConnecting) window.squaredElectron.setAppStatus({ mode: 'rehearsal', connected: false });
+      else window.squaredElectron.setAppStatus({ mode: 'idle', connected: false });
     }
   }, [isConnected, isConnecting]);
 
-  useEffect(() => () => {
-    window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
+  useEffect(() => {
+    if (!window.squaredElectron) return;
+    window.squaredElectron.updatePill(
+      dualAgentToPillState(deliveryState, screenState, elapsed, isConnected || isConnecting),
+    );
+    window.squaredElectron.updateSubtitles(dualAgentToSubtitleState(deliveryState, screenState));
+  }, [deliveryState, elapsed, isConnected, isConnecting, screenState]);
+
+  useEffect(() => {
+    return () => {
+      window.squaredElectron?.clearOverlay?.();
+      window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
+      if (mainWindowHiddenRef.current) {
+        window.squaredElectron?.showMainWindow?.();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.squaredElectron?.onStopSession) return;
+    const unsubscribe = window.squaredElectron.onStopSession(() => {
+      handleToggleConnectRef.current();
+    });
+    return unsubscribe;
   }, []);
 
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();
+      window.squaredElectron?.clearOverlay?.();
+      if (mainWindowHiddenRef.current) {
+        window.squaredElectron?.showMainWindow?.();
+        mainWindowHiddenRef.current = false;
+        setMainWindowHidden(false);
+      }
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
         try {
@@ -243,17 +267,14 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
 
     if (videoRef.current) {
       stopPreview();
-      connect(videoRef.current);
+      await connect(videoRef.current);
     }
   };
 
-  const riskCount = analysisLoading ? '-' : (analysis?.riskSegments.length ?? 0);
-  const runCount = analysisLoading ? '-' : (analysis?.rehearsalRuns ?? 0);
-  const hasRisks = !analysisLoading && (analysis?.riskSegments.length ?? 0) > 0;
+  handleToggleConnectRef.current = handleToggleConnect;
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950">
-      {/* Minimal header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60">
         <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
           <ArrowLeft className="w-4 h-4" />
@@ -273,12 +294,10 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
       </header>
 
       <main className="flex-1 flex gap-0 min-h-0">
-        {/* Video area */}
         <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-          {indicators && <CameraOverlay data={indicators} variant="rehearsal" />}
+          {isConnected && <DualAgentOverlay delivery={deliveryState} screen={screenState} variant="rehearsal" />}
 
-          {/* Control bar */}
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
             <button className="w-10 h-10 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors">
               <Video className="w-[18px] h-[18px]" />
@@ -303,6 +322,19 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
                 'Start'
               )}
             </button>
+            {isConnected && !mainWindowHidden && (
+              <button
+                onClick={() => {
+                  window.squaredElectron?.hideMainWindow?.();
+                  setMainWindowHidden(true);
+                  mainWindowHiddenRef.current = true;
+                }}
+                className="h-10 px-4 rounded-xl font-medium text-sm flex items-center gap-2 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all"
+              >
+                <Presentation className="w-3.5 h-3.5" />
+                Hide & Coach
+              </button>
+            )}
           </div>
 
           {error && (
@@ -312,9 +344,7 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
           )}
         </section>
 
-        {/* Right panel — single cohesive surface */}
-        <aside className="w-[320px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
-          {/* Project context strip */}
+        <aside className="w-[340px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between text-xs text-zinc-500 border-b border-zinc-800/40">
             <span className="uppercase tracking-wider font-medium">Project</span>
             <div className="flex items-center gap-2 text-zinc-400">
@@ -326,7 +356,6 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
             </div>
           </div>
 
-          {/* Risk segments (only if present) */}
           {hasRisks && (
             <div className="px-4 py-3 border-b border-zinc-800/40">
               <p className="text-[10px] uppercase tracking-wider text-zinc-600 mb-2">Prior weak spots</p>
@@ -342,7 +371,21 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
             </div>
           )}
 
-          {/* Session insights — fills remaining space */}
+          <div className="px-4 py-3 border-b border-zinc-800/40">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] uppercase tracking-wider text-zinc-600">Screen lane</p>
+              <span className="text-[10px] text-zinc-500">{screenStatusLabel(screenState.captureStatus)}</span>
+            </div>
+            <p className="text-sm font-semibold text-zinc-200">
+              {screenState.screenPrompt || (screenState.captureStatus === 'active' ? 'Watching slides' : 'Delivery-only fallback')}
+            </p>
+            {(screenState.screenDetails || screenState.sourceLabel) && (
+              <p className="text-xs text-zinc-400 mt-1.5 leading-relaxed">
+                {screenState.screenDetails || screenState.sourceLabel}
+              </p>
+            )}
+          </div>
+
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div className="px-4 py-3 flex items-center gap-2 border-b border-zinc-800/40">
               <Mic className="w-3.5 h-3.5 text-indigo-400" />
@@ -352,7 +395,7 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
             <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
               {isConnected ? (
                 <SessionInsights
-                  data={indicators ?? DEFAULT_INDICATORS}
+                  data={legacyIndicators}
                   feedbackHistory={feedbackHistory}
                   analyserRef={analyserRef}
                 />
@@ -365,11 +408,9 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
                   <div className="flex items-start gap-2.5 rounded-xl bg-zinc-950/40 px-3.5 py-3">
                     <Sparkles className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
                     <div>
-                      <p className="text-xs text-zinc-300 font-medium">Context loaded</p>
+                      <p className="text-xs text-zinc-300 font-medium">Dual context loaded</p>
                       <p className="text-[11px] text-zinc-500 mt-1 leading-relaxed">
-                        {project.slides.length > 0
-                          ? 'Slides, speaker notes, and prior weak spots are ready.'
-                          : 'Project description loaded. Upload a deck for slide-aware coaching.'}
+                        Start will spin up DeliveryAgent and ScreenAgent side-by-side. Canceling screen share keeps delivery coaching alive.
                       </p>
                     </div>
                   </div>

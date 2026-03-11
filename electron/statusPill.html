@@ -70,6 +70,20 @@
         background: rgba(255,255,255,0.06);
         white-space: nowrap;
       }
+      .screen-badge {
+        display: none;
+        margin: 0 0 10px auto;
+        width: fit-content;
+        font-size: 10px;
+        color: var(--muted);
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.05);
+        white-space: nowrap;
+      }
+      .screen-badge.status-active { color: var(--ok); display: block; }
+      .screen-badge.status-requesting { color: var(--watch); display: block; }
+      .screen-badge.status-lost { color: var(--danger); display: block; }
 
       /* Row 2: metrics */
       .metrics {
@@ -110,6 +124,7 @@
         </div>
         <span id="slide" class="slide-badge">--</span>
       </div>
+      <div id="screen-badge" class="screen-badge">Screen live</div>
       <div class="metrics">
         <span>Score <span id="score" class="val">—</span></span>
         <span>Fillers <span id="fillers" class="val">0</span></span>
@@ -122,6 +137,7 @@
       const pill = document.getElementById('pill');
       const timer = document.getElementById('timer');
       const slide = document.getElementById('slide');
+      const screenBadge = document.getElementById('screen-badge');
       const indEye = document.getElementById('ind-eye');
       const indPace = document.getElementById('ind-pace');
       const indPosture = document.getElementById('ind-posture');
@@ -147,6 +163,15 @@
         pill.className = 'pill' + (state.visible ? ' visible' : '');
         timer.textContent = state.elapsed || '0:00';
         slide.textContent = state.currentSlide != null ? 'Slide ' + state.currentSlide : '--';
+        const captureStatus = state.screenCaptureStatus || 'inactive';
+        screenBadge.className = 'screen-badge status-' + captureStatus;
+        screenBadge.textContent = captureStatus === 'active'
+          ? 'Screen live'
+          : captureStatus === 'requesting'
+            ? 'Screen connecting'
+            : captureStatus === 'lost'
+              ? 'Screen lost'
+              : 'Screen';
 
         const eyeLevel = classify(state.eyeContact, ['camera','good','direct'], ['looking away','around','down']);
         const paceLevel = classify(state.pace, ['good','normal','perfect'], ['fast','slow']);
