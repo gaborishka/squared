@@ -557,6 +557,15 @@ export function useLiveAPI({
 
   const disconnect = useCallback((options?: { skipSessionClose?: boolean }) => {
     const shouldCloseSession = !options?.skipSessionClose;
+    userInitiatedDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current !== null) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    isReconnectingRef.current = false;
+    setIsReconnecting(false);
+    reconnectAttemptsRef.current = 0;
+    resumptionHandleRef.current = null;
     const currentSessionPromise = sessionRef.current;
     sessionRef.current = null;
     isSocketOpenRef.current = false;
@@ -728,6 +737,8 @@ export function useLiveAPI({
   const connect = useCallback(async (videoElement: HTMLVideoElement) => {
     setIsConnecting(true);
     setError(null);
+    userInitiatedDisconnectRef.current = false;
+    reconnectAttemptsRef.current = 0;
     clearSpeakingTimers();
     setSpeakingState(false);
     resetDerivedIndicatorsState();
