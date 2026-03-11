@@ -373,6 +373,176 @@ export function useLiveAPI({
     });
   }, [isSessionTransportOpen]);
 
+  const handleServerMessage = useCallback((
+    message: LiveServerMessage,
+    sessionPromise: Promise<any>,
+    playbackContext: AudioContext,
+    sessionMode: 'rehearsal' | 'presentation',
+    ingestInputTranscript: (text: string) => void,
+    reconnectFn: () => void,
+  ) => {
+    if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) {
+      return;
+    }
+
+    if (message.setupComplete) {
+      isSessionReadyRef.current = true;
+      console.log(`[DebateCoach] Session setup complete at ${new Date().toISOString()}`);
+    }
+
+    // Save resumption handle for transparent reconnect
+    const msgAny = message as any;
+    if (msgAny.sessionResumptionUpdate) {
+      const { newHandle, resumable } = msgAny.sessionResumptionUpdate;
+      if (resumable !== false && newHandle) {
+        resumptionHandleRef.current = newHandle;
+        console.debug(`[DebateCoach] Resumption handle saved`);
+      }
+    }
+
+    // Server signals imminent disconnect — attempt reconnect
+    if (msgAny.goAway) {
+      console.warn(`[DebateCoach] Received goAway from server`);
+      if (!isReconnectingRef.current) {
+        reconnectFn();
+      }
+    }
+
+    // Log audio transcriptions (input & output)
+    const sc = message.serverContent as any;
+    if (sc?.inputTranscription?.text) {
+      console.log(`[DebateCoach] User said: "${sc.inputTranscription.text}"`);
+      ingestInputTranscript(sc.inputTranscription.text);
+    }
+    if (sc?.outputTranscription?.text) {
+      console.debug(`[DebateCoach] Model said: "${sc.outputTranscription.text}"`);
+    }
+
+    if (message.serverContent?.modelTurn) {
+      const parts = message.serverContent.modelTurn.parts;
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data && sessionMode === 'rehearsal') {
+          const base64Audio = part.inlineData.data;
+          const binaryString = atob(base64Audio);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const pcm16 = new Int16Array(bytes.buffer);
+          const audioBuffer = playbackContext.createBuffer(1, pcm16.length, 24000);
+          const channelData = audioBuffer.getChannelData(0);
+          for (let i = 0; i < pcm16.length; i++) {
+            channelData[i] = pcm16[i] / 32768;
+          }
+          const sourceNode = playbackContext.createBufferSource();
+          sourceNode.buffer = audioBuffer;
+          if (playbackAnalyserRef.current) {
+            sourceNode.connect(playbackAnalyserRef.current);
+          } else {
+            sourceNode.connect(playbackContext.destination);
+          }
+
+          const startTime = Math.max(playbackContext.currentTime, nextPlayTimeRef.current);
+          sourceNode.start(startTime);
+          nextPlayTimeRef.current = startTime + audioBuffer.duration;
+          sourceNodesRef.current.push(sourceNode);
+
+          if (speechStopTimeoutRef.current !== null) {
+            clearTimeout(speechStopTimeoutRef.current);
+            speechStopTimeoutRef.current = null;
+          }
+
+          const startDelayMs = Math.max(0, (startTime - playbackContext.currentTime) * 1000);
+          if (startDelayMs <= 20) {
+            setSpeakingState(true);
+          } else {
+            const timeoutId = window.setTimeout(() => {
+              speechStartTimeoutsRef.current = speechStartTimeoutsRef.current.filter(id => id !== timeoutId);
+              if (!isSocketOpenRef.current) return;
+              setSpeakingState(true);
+            }, startDelayMs);
+            speechStartTimeoutsRef.current.push(timeoutId);
+          }
+
+          sourceNode.onended = () => {
+            sourceNodesRef.current = sourceNodesRef.current.filter(n => n !== sourceNode);
+            if (sourceNodesRef.current.length === 0) {
+              if (speechStopTimeoutRef.current !== null) {
+                clearTimeout(speechStopTimeoutRef.current);
+              }
+              speechStopTimeoutRef.current = window.setTimeout(() => {
+                speechStopTimeoutRef.current = null;
+                if (!isSocketOpenRef.current) return;
+                setSpeakingState(false);
+              }, 90);
+            }
+          };
+        }
+      }
+    }
+
+    if (message.serverContent?.interrupted) {
+      clearSpeakingTimers();
+      sourceNodesRef.current.forEach(node => {
+        try { node.stop(); } catch (e) { }
+      });
+      sourceNodesRef.current = [];
+      setSpeakingState(false);
+      nextPlayTimeRef.current = playbackContext.currentTime;
+    }
+
+    if (message.toolCall) {
+      for (const call of message.toolCall.functionCalls) {
+        if (call.name === 'updateIndicators' && onIndicatorsUpdateRef.current) {
+          console.log(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
+            pace: call.args?.pace,
+            eyeContact: call.args?.eyeContact,
+            overallScore: call.args?.overallScore,
+            currentSlide: call.args?.currentSlide,
+            agentMode: call.args?.agentMode,
+            microPrompt: call.args?.microPrompt,
+            rescueText: call.args?.rescueText,
+          });
+          if (call.args && typeof call.args === 'object') {
+            const update = { ...(call.args as IndicatorUpdate) };
+            if (localVisualActiveRef.current) {
+              delete update.eyeContact;
+              delete update.posture;
+            }
+            onIndicatorsUpdateRef.current(update);
+          }
+        }
+
+        if (call.name === 'saveSlideAnalysis' && onSlideAnalysisRef.current && call.args && typeof call.args === 'object') {
+          const payload = call.args as unknown as SlideAnalysisToolPayload;
+          if (typeof payload.slideNumber === 'number' && Array.isArray(payload.issues) && typeof payload.riskLevel === 'string') {
+            onSlideAnalysisRef.current({
+              slideNumber: payload.slideNumber,
+              issues: payload.issues,
+              bestPhrase: payload.bestPhrase ?? '',
+              riskLevel: payload.riskLevel,
+            });
+          }
+        }
+
+        withOpenSession((session) => {
+          try {
+            session.sendToolResponse({
+              functionResponses: [{
+                id: call.id,
+                name: call.name,
+                response: { result: "ok" },
+                scheduling: FunctionResponseScheduling.SILENT,
+              }]
+            });
+          } catch (err) {
+            // Ignore send errors
+          }
+        });
+      }
+    }
+  }, [withOpenSession, setSpeakingState, clearSpeakingTimers]);
+
   const disconnect = useCallback((options?: { skipSessionClose?: boolean }) => {
     const shouldCloseSession = !options?.skipSessionClose;
     const currentSessionPromise = sessionRef.current;
@@ -582,6 +752,7 @@ export function useLiveAPI({
           breakdown[label] = (breakdown[label] ?? 0) + matches.length;
         }
       };
+      ingestInputTranscriptRef.current = ingestInputTranscript;
 
       const startLocalVisualAnalysis = async () => {
         if (!onIndicatorsUpdate) return;
@@ -983,148 +1154,7 @@ export function useLiveAPI({
 
           },
           onmessage: async (message: LiveServerMessage) => {
-            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) {
-              return;
-            }
-
-            if (message.setupComplete) {
-              isSessionReadyRef.current = true;
-              console.log(`[DebateCoach] Session setup complete at ${new Date().toISOString()}`);
-            }
-
-            // Log audio transcriptions (input & output)
-            const sc = message.serverContent as any;
-            if (sc?.inputTranscription?.text) {
-              console.log(`[DebateCoach] User said: "${sc.inputTranscription.text}"`);
-              ingestInputTranscript(sc.inputTranscription.text);
-            }
-            if (sc?.outputTranscription?.text) {
-              console.debug(`[DebateCoach] Model said: "${sc.outputTranscription.text}"`);
-            }
-
-            if (message.serverContent?.modelTurn) {
-              const parts = message.serverContent.modelTurn.parts;
-              for (const part of parts) {
-                if (part.inlineData && part.inlineData.data && mode === 'rehearsal') {
-                  const base64Audio = part.inlineData.data;
-                  const binaryString = atob(base64Audio);
-                  const bytes = new Uint8Array(binaryString.length);
-                  for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                  }
-                  const pcm16 = new Int16Array(bytes.buffer);
-                  const audioBuffer = playbackContext.createBuffer(1, pcm16.length, 24000);
-                  const channelData = audioBuffer.getChannelData(0);
-                  for (let i = 0; i < pcm16.length; i++) {
-                    channelData[i] = pcm16[i] / 32768;
-                  }
-                  const sourceNode = playbackContext.createBufferSource();
-                  sourceNode.buffer = audioBuffer;
-                  if (playbackAnalyserRef.current) {
-                    sourceNode.connect(playbackAnalyserRef.current);
-                  } else {
-                    sourceNode.connect(playbackContext.destination);
-                  }
-
-                  const startTime = Math.max(playbackContext.currentTime, nextPlayTimeRef.current);
-                  sourceNode.start(startTime);
-                  nextPlayTimeRef.current = startTime + audioBuffer.duration;
-                  sourceNodesRef.current.push(sourceNode);
-
-                  if (speechStopTimeoutRef.current !== null) {
-                    clearTimeout(speechStopTimeoutRef.current);
-                    speechStopTimeoutRef.current = null;
-                  }
-
-                  const startDelayMs = Math.max(0, (startTime - playbackContext.currentTime) * 1000);
-                  if (startDelayMs <= 20) {
-                    setSpeakingState(true);
-                  } else {
-                    const timeoutId = window.setTimeout(() => {
-                      speechStartTimeoutsRef.current = speechStartTimeoutsRef.current.filter(id => id !== timeoutId);
-                      if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-                      setSpeakingState(true);
-                    }, startDelayMs);
-                    speechStartTimeoutsRef.current.push(timeoutId);
-                  }
-
-                  sourceNode.onended = () => {
-                    sourceNodesRef.current = sourceNodesRef.current.filter(n => n !== sourceNode);
-                    if (sourceNodesRef.current.length === 0) {
-                      if (speechStopTimeoutRef.current !== null) {
-                        clearTimeout(speechStopTimeoutRef.current);
-                      }
-                      speechStopTimeoutRef.current = window.setTimeout(() => {
-                        speechStopTimeoutRef.current = null;
-                        if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-                        setSpeakingState(false);
-                      }, 90);
-                    }
-                  };
-                }
-              }
-            }
-
-            if (message.serverContent?.interrupted) {
-              clearSpeakingTimers();
-              sourceNodesRef.current.forEach(node => {
-                try { node.stop(); } catch (e) { }
-              });
-              sourceNodesRef.current = [];
-              setSpeakingState(false);
-              nextPlayTimeRef.current = playbackContext.currentTime;
-            }
-
-            if (message.toolCall) {
-              for (const call of message.toolCall.functionCalls) {
-                if (call.name === 'updateIndicators' && onIndicatorsUpdate) {
-                  console.log(`[DebateCoach] Tool call received at ${new Date().toISOString()}`, {
-                    pace: call.args?.pace,
-                    eyeContact: call.args?.eyeContact,
-                    overallScore: call.args?.overallScore,
-                    currentSlide: call.args?.currentSlide,
-                    agentMode: call.args?.agentMode,
-                    microPrompt: call.args?.microPrompt,
-                    rescueText: call.args?.rescueText,
-                  });
-                  if (call.args && typeof call.args === 'object') {
-                    const update = { ...(call.args as IndicatorUpdate) };
-                    if (localVisualActiveRef.current) {
-                      delete update.eyeContact;
-                      delete update.posture;
-                    }
-                    onIndicatorsUpdate(update);
-                  }
-                }
-
-                if (call.name === 'saveSlideAnalysis' && onSlideAnalysis && call.args && typeof call.args === 'object') {
-                  const payload = call.args as unknown as SlideAnalysisToolPayload;
-                  if (typeof payload.slideNumber === 'number' && Array.isArray(payload.issues) && typeof payload.riskLevel === 'string') {
-                    onSlideAnalysis({
-                      slideNumber: payload.slideNumber,
-                      issues: payload.issues,
-                      bestPhrase: payload.bestPhrase ?? '',
-                      riskLevel: payload.riskLevel,
-                    });
-                  }
-                }
-
-                withOpenSession((session) => {
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: call.id,
-                        name: call.name,
-                        response: { result: "ok" },
-                        scheduling: FunctionResponseScheduling.SILENT,
-                      }]
-                    });
-                  } catch (err) {
-                    // Ignore send errors
-                  }
-                });
-              }
-            }
+            handleServerMessage(message, sessionPromise, playbackContext, mode, ingestInputTranscript, reconnectRef.current);
           },
           onclose: (event: CloseEvent) => {
             if (sessionRef.current !== sessionPromise) return;
@@ -1161,7 +1191,7 @@ export function useLiveAPI({
       setError(err.message);
       disconnect({ skipSessionClose: true });
     }
-  }, [mode, onIndicatorsUpdate, onMediaStream, onSlideAnalysis, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState, withOpenSession]);
+  }, [mode, onIndicatorsUpdate, onMediaStream, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState, withOpenSession, handleServerMessage]);
 
   return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }
