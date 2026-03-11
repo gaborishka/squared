@@ -69,6 +69,7 @@
   "build": {
     "appId": "com.squared.desktop",
     "productName": "Squared",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
@@ -88,6 +89,7 @@
       }
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.business",
       "target": [
         "dir"

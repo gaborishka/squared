@@ -198,6 +198,27 @@ export interface OverlayState {
   currentSlide: number | null;
 }
 
+export interface PillState {
+  visible: boolean;
+  elapsed: string;
+  currentSlide: number | null;
+  pace: string;
+  eyeContact: string;
+  posture: string;
+  fillerCount: number;
+  confidenceScore: number;
+  overallScore: number;
+  agentMode: AgentMode;
+  slideTimeRemaining: number | null;
+}
+
+export interface SubtitleState {
+  visible: boolean;
+  mode: AgentMode;
+  microPrompt: string;
+  rescueText: string;
+}
+
 export interface DesktopAppStatus {
   mode: 'idle' | 'rehearsal' | 'presentation';
   connected: boolean;

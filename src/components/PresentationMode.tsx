@@ -14,7 +14,7 @@ import {
 } from '../lib/session';
 import { CameraOverlay } from './CameraOverlay';
 import { AnalyzingPulse } from './AnalyzingPulse';
-import { DEFAULT_INDICATORS, GamePlan, IndicatorData, IndicatorUpdate, ProjectDetails, indicatorToOverlayState, mergeIndicatorData } from '../types';
+import { DEFAULT_INDICATORS, GamePlan, IndicatorData, IndicatorUpdate, ProjectDetails, indicatorToPillState, indicatorToSubtitleState, mergeIndicatorData } from '../types';
 
 interface PresentationModeProps {
   project: ProjectDetails;
@@ -60,6 +60,10 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState('0:00');
+  const isElectronApp = Boolean(window.squaredElectron?.isElectron);
+  const [mainWindowHidden, setMainWindowHidden] = useState(false);
+  const mainWindowHiddenRef = useRef(false);
+  const handleToggleConnectRef = useRef<() => void>(() => {});
 
   const contextText = useMemo(() => buildPresentationContext(project, gamePlan), [project, gamePlan]);
 
@@ -179,23 +183,42 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
-    const overlayState = indicatorToOverlayState(indicators);
-    if (window.squaredElectron?.updateOverlay) {
-      window.squaredElectron.updateOverlay(overlayState);
+    if (!window.squaredElectron) return;
+    if (window.squaredElectron.updatePill) {
+      window.squaredElectron.updatePill(indicatorToPillState(indicators, elapsed));
     }
-  }, [indicators]);
+    if (window.squaredElectron.updateSubtitles) {
+      window.squaredElectron.updateSubtitles(indicatorToSubtitleState(indicators));
+    }
+  }, [indicators, elapsed]);
 
   useEffect(() => {
     return () => {
       window.squaredElectron?.clearOverlay?.();
       window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
+      if (mainWindowHiddenRef.current) {
+        window.squaredElectron?.showMainWindow?.();
+      }
     };
+  }, []);
+
+  useEffect(() => {
+    if (!window.squaredElectron?.onStopSession) return;
+    const unsubscribe = window.squaredElectron.onStopSession(() => {
+      handleToggleConnectRef.current();
+    });
+    return unsubscribe;
   }, []);
 
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
       disconnect();
       window.squaredElectron?.clearOverlay?.();
+      if (mainWindowHiddenRef.current) {
+        window.squaredElectron?.showMainWindow?.();
+        setMainWindowHidden(false);
+        mainWindowHiddenRef.current = false;
+      }
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
         try {
@@ -223,6 +246,8 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
       connect(videoRef.current);
     }
   };
+
+  handleToggleConnectRef.current = handleToggleConnect;
 
   const currentSegment = indicators?.currentSlide != null
     ? gamePlan.segments.find((segment) => segment.slideNumber === indicators.currentSlide)
@@ -287,6 +312,19 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                 </>
               )}
             </button>
+            {isConnected && isElectronApp && !mainWindowHidden && (
+              <button
+                onClick={() => {
+                  window.squaredElectron?.hideMainWindow?.();
+                  setMainWindowHidden(true);
+                  mainWindowHiddenRef.current = true;
+                }}
+                className="h-10 px-4 rounded-xl font-medium text-sm flex items-center gap-2 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all"
+              >
+                <Presentation className="w-3.5 h-3.5" />
+                Hide & Present
+              </button>
+            )}
           </div>
 
           {error && (

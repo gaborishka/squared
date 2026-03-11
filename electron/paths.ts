@@ -10,7 +10,8 @@ export interface ElectronPaths {
   frontendDistDir: string;
   devServerUrl: string;
   serverEntry: string;
-  overlayHtmlPath: string;
+  statusPillHtmlPath: string;
+  subtitlesHtmlPath: string;
   trayIconPath: string;
   userDataPath: string;
   executableDir: string;
@@ -18,18 +19,20 @@ export interface ElectronPaths {
 
 export function getElectronPaths(): ElectronPaths {
   const appRoot = app.getAppPath();
-  const resourcesRoot = app.isPackaged ? process.resourcesPath : appRoot;
+  const projectRoot = app.isPackaged ? appRoot : path.resolve(electronDistDir, '..', '..');
+  const resourcesRoot = app.isPackaged ? process.resourcesPath : projectRoot;
 
   return {
     preloadPath: app.isPackaged
-      ? path.resolve(appRoot, 'dist-electron/electron/preload.js')
-      : path.resolve(electronDistDir, 'preload.js'),
+      ? path.resolve(appRoot, 'dist-electron/electron/preload.cjs')
+      : path.resolve(electronDistDir, 'preload.cjs'),
     frontendDistDir: path.resolve(resourcesRoot, 'dist'),
     devServerUrl: 'http://127.0.0.1:5173',
     serverEntry: app.isPackaged
       ? path.resolve(appRoot, 'dist-server/server/index.js')
       : path.resolve(resourcesRoot, 'dist-server/server/index.js'),
-    overlayHtmlPath: path.resolve(resourcesRoot, 'electron/overlay.html'),
+    statusPillHtmlPath: path.resolve(resourcesRoot, 'electron/statusPill.html'),
+    subtitlesHtmlPath: path.resolve(resourcesRoot, 'electron/subtitles.html'),
     trayIconPath: path.resolve(resourcesRoot, 'electron/assets/tray-template.svg'),
     userDataPath: app.getPath('userData'),
     executableDir: path.dirname(app.getPath('exe')),

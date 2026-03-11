@@ -1,5 +1,5 @@
 export * from '../shared/types';
-import type { IndicatorData, IndicatorUpdate, OverlayState } from '../shared/types';
+import type { IndicatorData, IndicatorUpdate, PillState, SubtitleState } from '../shared/types';
 
 export const DEFAULT_INDICATORS: IndicatorData = {
   pace: 'Analyzing...',
@@ -33,25 +33,43 @@ export function mergeIndicatorData(previous: IndicatorData | null, update: Indic
     eyeContact: update.eyeContact ?? base.eyeContact,
     posture: update.posture ?? base.posture,
     fillerWords: nextFillerWords,
-    feedbackMessage: update.feedbackMessage ?? base.feedbackMessage,
+    feedbackMessage: update.feedbackMessage !== undefined ? update.feedbackMessage : base.feedbackMessage,
     confidenceScore: update.confidenceScore ?? base.confidenceScore,
     volumeLevel: update.volumeLevel ?? base.volumeLevel,
     overallScore: update.overallScore ?? base.overallScore,
     currentSlide: update.currentSlide ?? base.currentSlide,
-    microPrompt: update.microPrompt ?? base.microPrompt,
-    rescueText: update.rescueText ?? base.rescueText,
+    microPrompt: update.microPrompt !== undefined ? update.microPrompt : base.microPrompt,
+    rescueText: update.rescueText !== undefined ? update.rescueText : base.rescueText,
     agentMode: update.agentMode ?? base.agentMode,
     slideTimeRemaining: update.slideTimeRemaining ?? base.slideTimeRemaining,
   };
 }
 
-export function indicatorToOverlayState(indicators: IndicatorData | null): OverlayState {
+export function indicatorToPillState(indicators: IndicatorData | null, elapsed: string): PillState {
   return {
-    visible: Boolean(indicators?.microPrompt || indicators?.rescueText),
-    mode: indicators?.agentMode ?? 'monitor',
+    visible: indicators !== null,
+    elapsed,
+    currentSlide: indicators?.currentSlide ?? null,
+    pace: indicators?.pace ?? 'Analyzing...',
+    eyeContact: indicators?.eyeContact ?? 'Analyzing...',
+    posture: indicators?.posture ?? 'Analyzing...',
+    fillerCount: indicators?.fillerWords?.total ?? 0,
+    confidenceScore: indicators?.confidenceScore ?? 0,
+    overallScore: indicators?.overallScore ?? 0,
+    agentMode: indicators?.agentMode ?? 'monitor',
+    slideTimeRemaining: indicators?.slideTimeRemaining ?? null,
+  };
+}
+
+export function indicatorToSubtitleState(indicators: IndicatorData | null): SubtitleState {
+  const mode = indicators?.agentMode ?? 'monitor';
+  const hasCue = Boolean(indicators?.microPrompt || indicators?.rescueText);
+  // Only show subtitles when agent actively provides a cue AND is not in monitor mode
+  const visible = hasCue && mode !== 'monitor';
+  return {
+    visible,
+    mode,
     microPrompt: indicators?.microPrompt ?? '',
     rescueText: indicators?.rescueText ?? '',
-    slideTimeRemaining: indicators?.slideTimeRemaining ?? null,
-    currentSlide: indicators?.currentSlide ?? null,
   };
 }

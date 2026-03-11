@@ -203,9 +203,10 @@ export function buildPresentationContext(project: ProjectDetails, gamePlan: Game
     segments,
     'Instructions:',
     '- Do not speak. Use updateIndicators only.',
-    '- Keep microPrompt extremely short, ideally 1-3 words.',
-    '- Use rescueText only when the user is clearly stuck and you have a recovery phrase or concise teleprompter line.',
-    '- Include currentSlide, slideTimeRemaining, and agentMode in updates.',
+    '- Keep microPrompt extremely short, ideally 1-3 words. Set microPrompt to "" (empty string) when the cue is no longer needed.',
+    '- Use rescueText only when the user is clearly stuck and you have a recovery phrase or concise teleprompter line. Set rescueText to "" when no longer needed.',
+    '- Set agentMode to "monitor" when no intervention is needed, "soft_cue" for gentle hints, "directive" for strong guidance, "rescue" for emergencies.',
+    '- Include currentSlide, slideTimeRemaining, and agentMode in every update.',
     '- Respect the attention budget and favor interventions on priority slides.',
   ]
     .filter(Boolean)

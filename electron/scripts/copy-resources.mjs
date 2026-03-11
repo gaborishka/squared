@@ -15,8 +15,13 @@ async function copyResource(from, to) {
 await fs.rm(distResourcesDir, { recursive: true, force: true });
 
 await copyResource(
-  path.resolve(projectRoot, 'electron/overlay.html'),
-  path.resolve(distResourcesDir, 'electron/overlay.html'),
+  path.resolve(projectRoot, 'electron/statusPill.html'),
+  path.resolve(distResourcesDir, 'electron/statusPill.html'),
+);
+
+await copyResource(
+  path.resolve(projectRoot, 'electron/subtitles.html'),
+  path.resolve(distResourcesDir, 'electron/subtitles.html'),
 );
 
 await copyResource(

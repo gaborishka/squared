@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Squared Subtitles</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --text: #f4f4f5;
+        --muted: rgba(244, 244, 245, 0.7);
+        --ok: #34d399;
+        --watch: #fbbf24;
+        --danger: #f87171;
+      }
+      * { box-sizing: border-box; margin: 0; }
+      html, body {
+        width: 100%; height: 100%;
+        overflow: hidden; background: transparent;
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        user-select: none;
+        display: flex; align-items: flex-end; justify-content: center;
+        padding-bottom: 8px;
+      }
+      .bar {
+        display: none;
+        text-align: center;
+        padding: 12px 28px;
+        border-radius: 16px;
+        background: rgba(0, 0, 0, 0.78);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        box-shadow: 0 8px 40px rgba(0,0,0,0.4);
+        max-width: 100%;
+        animation: fadeUp 0.25s ease-out;
+      }
+      .bar.visible { display: block; }
+
+      @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .bar.mode-rescue {
+        border: 1px solid rgba(248,113,113,0.35);
+      }
+      .bar.mode-directive {
+        border: 1px solid rgba(251,191,36,0.3);
+      }
+      .bar.mode-soft_cue {
+        border: 1px solid rgba(52,211,153,0.25);
+      }
+      .bar.mode-monitor {
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+
+      .prompt {
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        color: var(--text);
+        line-height: 1.3;
+      }
+      .bar.mode-rescue .prompt { color: var(--danger); }
+      .bar.mode-directive .prompt { color: var(--watch); }
+      .bar.mode-soft_cue .prompt { color: var(--ok); }
+
+      .rescue {
+        display: none;
+        margin-top: 8px;
+        font-size: 15px;
+        line-height: 1.45;
+        color: var(--muted);
+      }
+      .rescue.visible { display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="bar" class="bar">
+      <div id="prompt" class="prompt"></div>
+      <div id="rescue" class="rescue"></div>
+    </div>
+
+    <script>
+      const bar = document.getElementById('bar');
+      const prompt = document.getElementById('prompt');
+      const rescue = document.getElementById('rescue');
+
+      let hideTimer = null;
+      let shownContent = '';  // content currently displayed (while bar is visible)
+
+      function getHideDelay(mode) {
+        if (mode === 'rescue') return 15000;
+        if (mode === 'directive') return 10000;
+        return 6000;
+      }
+
+      function isBarVisible() {
+        return bar.classList.contains('visible');
+      }
+
+      function hideBar() {
+        bar.classList.remove('visible');
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+        shownContent = '';
+      }
+
+      function update(state) {
+        const content = (state.microPrompt || '') + '|' + (state.rescueText || '');
+        const hasContent = content !== '|';
+
+        // Nothing to show — hide immediately
+        if (!state.visible || !hasContent) {
+          hideBar();
+          return;
+        }
+
+        // Same content already displayed and bar is still visible — skip
+        if (content === shownContent && isBarVisible()) return;
+
+        // New content (or bar was hidden) — show it
+        shownContent = content;
+
+        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+
+        bar.className = 'bar visible mode-' + state.mode;
+        prompt.textContent = state.microPrompt || '';
+        rescue.textContent = state.rescueText || '';
+        rescue.className = 'rescue' + (state.rescueText ? ' visible' : '');
+
+        hideTimer = setTimeout(() => {
+          hideBar();
+        }, getHideDelay(state.mode));
+      }
+
+      if (window.squaredElectron?.onSubtitleState) {
+        window.squaredElectron.onSubtitleState(update);
+      }
+    </script>
+  </body>
+</html>

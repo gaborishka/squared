@@ -1049,6 +1049,8 @@ export function useLiveAPI({
                     overallScore: call.args?.overallScore,
                     currentSlide: call.args?.currentSlide,
                     agentMode: call.args?.agentMode,
+                    microPrompt: call.args?.microPrompt,
+                    rescueText: call.args?.rescueText,
                   });
                   if (call.args && typeof call.args === 'object') {
                     const update = { ...(call.args as IndicatorUpdate) };
@@ -1056,9 +1058,7 @@ export function useLiveAPI({
                       delete update.eyeContact;
                       delete update.posture;
                     }
-                    if (Object.keys(update).length > 0) {
-                      onIndicatorsUpdate(update);
-                    }
+                    onIndicatorsUpdate(update);
                   }
                 }
 

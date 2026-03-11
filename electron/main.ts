@@ -2,7 +2,8 @@ import { app, BrowserWindow, dialog } from 'electron';
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { registerIpc } from './ipc.js';
-import { createOverlayWindow } from './overlay.js';
+import { createPillWindow } from './statusPill.js';
+import { createSubtitlesWindow } from './subtitles.js';
 import { getElectronPaths } from './paths.js';
 import { buildLocalUrl, DEFAULT_SERVER_PORT, findAvailablePort } from './runtime.js';
 import { createAppTray } from './tray.js';
@@ -10,7 +11,8 @@ import type { DesktopAppStatus } from '../shared/types.js';
 import { migrateLegacyAppData } from '../server/config/dataMigration.js';
 
 let mainWindow: BrowserWindow | null = null;
-let overlayWindow: BrowserWindow | null = null;
+let pillWindow: BrowserWindow | null = null;
+let subtitlesWindow: BrowserWindow | null = null;
 let bundledServer: ChildProcess | null = null;
 let bundledServerPort: number | null = null;
 let ipcRegistration: ReturnType<typeof registerIpc> | null = null;
@@ -181,24 +183,36 @@ async function createWindows(): Promise<void> {
     );
   });
 
-  overlayWindow = createOverlayWindow(paths.preloadPath, paths.overlayHtmlPath);
-  ipcRegistration = registerIpc(mainWindow, overlayWindow, {
+  pillWindow = createPillWindow(paths.preloadPath, paths.statusPillHtmlPath);
+  subtitlesWindow = createSubtitlesWindow(paths.preloadPath, paths.subtitlesHtmlPath);
+  ipcRegistration = registerIpc(mainWindow, pillWindow, subtitlesWindow, {
     getOverlayEnabled: () => overlayEnabled,
     onStatusUpdate: (status) => {
       appStatus = status;
       refreshTray();
     },
+    onHideMainWindow: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.hide();
+      }
+    },
+    onShowMainWindow: focusMainWindow,
   });
   ensureTray(paths);
 
   await mainWindow.loadURL(isDev ? paths.devServerUrl : buildLocalUrl(serverPort));
 
+  // Ensure dock icon stays visible on macOS
+  if (process.platform === 'darwin' && app.dock) {
+    void app.dock.show();
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null;
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.close();
-    }
-    overlayWindow = null;
+    if (pillWindow && !pillWindow.isDestroyed()) pillWindow.close();
+    if (subtitlesWindow && !subtitlesWindow.isDestroyed()) subtitlesWindow.close();
+    pillWindow = null;
+    subtitlesWindow = null;
     ipcRegistration = null;
   });
 }

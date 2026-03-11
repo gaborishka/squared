@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Squared Status</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: rgba(9, 9, 11, 0.82);
+        --text: #f4f4f5;
+        --muted: rgba(244, 244, 245, 0.5);
+        --ok: #34d399;
+        --watch: #fbbf24;
+        --danger: #f87171;
+        --neutral: rgba(255, 255, 255, 0.22);
+        --border: rgba(255, 255, 255, 0.08);
+      }
+      * { box-sizing: border-box; margin: 0; }
+      html, body {
+        width: 100%; height: 100%;
+        overflow: hidden; background: transparent;
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        -webkit-app-region: drag;
+        user-select: none;
+      }
+      .pill {
+        display: none;
+        width: 100%;
+        border-radius: 18px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+        box-shadow: 0 12px 48px rgba(0,0,0,0.45);
+        color: var(--text);
+        padding: 12px 16px;
+      }
+      .pill.visible { display: block; }
+
+      /* Row 1: timer · eye · mic · user · slide — evenly spaced */
+      .top-row {
+        display: flex; align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+      .timer {
+        font-size: 24px; font-weight: 700;
+        letter-spacing: -0.03em;
+        font-variant-numeric: tabular-nums;
+      }
+      .ind {
+        color: var(--neutral);
+        transition: color 0.3s;
+        line-height: 0;
+      }
+      .ind svg {
+        width: 24px; height: 24px;
+        stroke: currentColor; fill: none;
+        stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
+      }
+      .ind.lvl-ok { color: var(--ok); }
+      .ind.lvl-warn { color: var(--watch); }
+      .ind.lvl-bad { color: var(--danger); }
+      .ind.lvl-neutral { color: var(--neutral); }
+
+      .slide-badge {
+        font-size: 11px; color: var(--muted);
+        padding: 2px 8px;
+        border-radius: 6px;
+        background: rgba(255,255,255,0.06);
+        white-space: nowrap;
+      }
+
+      /* Row 2: metrics */
+      .metrics {
+        display: flex; justify-content: center; gap: 16px;
+        font-size: 12px; color: var(--muted);
+        margin-bottom: 10px;
+      }
+      .metrics span { font-variant-numeric: tabular-nums; }
+      .metrics .val { color: var(--text); font-weight: 600; }
+
+      /* Row 3: stop */
+      .stop-btn {
+        -webkit-app-region: no-drag;
+        display: flex; align-items: center; justify-content: center; gap: 5px;
+        width: 100%; height: 30px;
+        border-radius: 10px; border: none;
+        background: rgba(248,113,113,0.12);
+        color: var(--danger);
+        font-size: 13px; font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .stop-btn:hover { background: rgba(248,113,113,0.22); }
+    </style>
+  </head>
+  <body>
+    <div id="pill" class="pill">
+      <div class="top-row">
+        <span id="timer" class="timer">0:00</span>
+        <div id="ind-eye" class="ind lvl-neutral">
+          <svg viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>
+        </div>
+        <div id="ind-pace" class="ind lvl-neutral">
+          <svg viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+        </div>
+        <div id="ind-posture" class="ind lvl-neutral">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>
+        </div>
+        <span id="slide" class="slide-badge">--</span>
+      </div>
+      <div class="metrics">
+        <span>Score <span id="score" class="val">—</span></span>
+        <span>Fillers <span id="fillers" class="val">0</span></span>
+        <span>Conf <span id="confidence" class="val">—</span></span>
+      </div>
+      <button id="stop-btn" class="stop-btn">&#9632; Stop</button>
+    </div>
+
+    <script>
+      const pill = document.getElementById('pill');
+      const timer = document.getElementById('timer');
+      const slide = document.getElementById('slide');
+      const indEye = document.getElementById('ind-eye');
+      const indPace = document.getElementById('ind-pace');
+      const indPosture = document.getElementById('ind-posture');
+      const score = document.getElementById('score');
+      const fillers = document.getElementById('fillers');
+      const confidence = document.getElementById('confidence');
+      const stopBtn = document.getElementById('stop-btn');
+
+      function classify(text, goodWords, badWords) {
+        if (!text) return 'neutral';
+        const l = text.toLowerCase();
+        if (badWords.some(w => l.includes(w))) return 'bad';
+        if (l.includes('watch') || l.includes('not visible') || l.includes('glancing') || l.includes('face not') || l.includes('posture not')) return 'warn';
+        if (goodWords.some(w => l.includes(w))) return 'ok';
+        return 'neutral';
+      }
+
+      function setLevel(el, level) {
+        el.className = 'ind lvl-' + level;
+      }
+
+      function update(state) {
+        pill.className = 'pill' + (state.visible ? ' visible' : '');
+        timer.textContent = state.elapsed || '0:00';
+        slide.textContent = state.currentSlide != null ? 'Slide ' + state.currentSlide : '--';
+
+        const eyeLevel = classify(state.eyeContact, ['camera','good','direct'], ['looking away','around','down']);
+        const paceLevel = classify(state.pace, ['good','normal','perfect'], ['fast','slow']);
+        const postureLevel = classify(state.posture, ['good','straight','upright'], ['slouch','bad']);
+
+        setLevel(indEye, eyeLevel);
+        setLevel(indPace, paceLevel);
+        setLevel(indPosture, postureLevel);
+
+        score.textContent = state.overallScore > 0 ? state.overallScore : '—';
+        fillers.textContent = state.fillerCount;
+        confidence.textContent = state.confidenceScore > 0 ? state.confidenceScore : '—';
+      }
+
+      stopBtn.addEventListener('click', () => {
+        if (window.squaredElectron?.stopSession) {
+          window.squaredElectron.stopSession();
+        }
+      });
+
+      if (window.squaredElectron?.onPillState) {
+        window.squaredElectron.onPillState(update);
+      }
+    </script>
+  </body>
+</html>
