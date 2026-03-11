@@ -1301,27 +1301,44 @@ export function useLiveAPI({
           onclose: (event: CloseEvent) => {
             if (sessionRef.current !== sessionPromise) return;
             const wasReady = isSessionReadyRef.current;
-            console.debug(`[DebateCoach] Session closed natively at ${new Date().toISOString()}`, {
-              code: event.code,
-              reason: event.reason,
-              wasClean: event.wasClean,
-              wasReady,
+            console.debug(`[DebateCoach] Session closed at ${new Date().toISOString()}`, {
+              code: event.code, reason: event.reason, wasClean: event.wasClean, wasReady,
             });
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (userInitiatedDisconnectRef.current) return;
             if (!wasReady && event.code !== 1000) {
               const closeReason = event.reason?.trim();
               setError(closeReason ? `Session closed before setup: ${closeReason}` : `Session closed before setup (code ${event.code})`);
+              disconnect({ skipSessionClose: true });
+              return;
             }
-            isSocketOpenRef.current = false;
-            isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (isReconnectingRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[DebateCoach] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
           },
           onerror: (err: any) => {
             if (sessionRef.current !== sessionPromise) return;
             console.error("Live API Error:", err);
-            setError(err.message || "An error occurred");
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (userInitiatedDisconnectRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              setError(err.message || "An error occurred");
+              disconnect({ skipSessionClose: true });
+            }
           }
         }
       });
@@ -1369,5 +1386,5 @@ export function useLiveAPI({
     }
   }, [mode, onIndicatorsUpdate, onMediaStream, onTranscriptSegment, disconnect, clearSpeakingTimers, setSpeakingState, resetDerivedIndicatorsState, resetLocalVisualState, withOpenSession, handleServerMessage]);
 
-  return { isConnected, isConnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
+  return { isConnected, isConnecting, isReconnecting, error, connect, disconnect, analyserRef, playbackAnalyserRef, isSpeaking };
 }
