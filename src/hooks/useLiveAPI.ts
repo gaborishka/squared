@@ -543,6 +543,18 @@ export function useLiveAPI({
     }
   }, [withOpenSession, setSpeakingState, clearSpeakingTimers]);
 
+  const closeSession = useCallback(() => {
+    const currentSessionPromise = sessionRef.current;
+    sessionRef.current = null;
+    isSocketOpenRef.current = false;
+    isSessionReadyRef.current = false;
+    if (currentSessionPromise) {
+      currentSessionPromise.then((session: any) => {
+        try { session.close(); } catch (e) { }
+      });
+    }
+  }, []);
+
   const disconnect = useCallback((options?: { skipSessionClose?: boolean }) => {
     const shouldCloseSession = !options?.skipSessionClose;
     const currentSessionPromise = sessionRef.current;
