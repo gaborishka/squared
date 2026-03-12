@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, AlertCircle, Mic, Video, Phone, Sparkles } from 'lucide-react';
+import { ArrowLeft, AlertCircle, History, Mic, Phone, Sparkles, Video } from 'lucide-react';
 import { api } from '../api/client';
 import { useLiveAPI } from '../hooks/useLiveAPI';
 import {
@@ -10,13 +10,25 @@ import {
   formatTimestampFromStart,
   ingestIndicatorSample,
   mergeSlideAnalysis,
+  resolveLiveMemoryCue,
   summarizeSessionMetrics,
 } from '../lib/session';
+import { buildTranscriptSegmentDraft, pickSupportedRecordingMimeType } from '../lib/runCapture';
 import { CameraOverlay } from './CameraOverlay';
 import { SessionInsights } from './SessionInsights';
 import { AnalyzingPulse } from './AnalyzingPulse';
 import { DesktopRehearsalMode } from './DesktopRehearsalMode';
-import { DEFAULT_INDICATORS, IndicatorData, IndicatorUpdate, ProjectAnalysis, ProjectDetails, mergeIndicatorData } from '../types';
+import {
+  DEFAULT_INDICATORS,
+  IndicatorData,
+  IndicatorUpdate,
+  LiveMemoryCue,
+  ProjectAnalysis,
+  ProjectDetails,
+  RunArtifact,
+  RunTranscriptSegment,
+  mergeIndicatorData,
+} from '../types';
 import type { FeedbackItem } from './FeedbackTimeline';
 
 interface RehearsalModeProps {
@@ -44,26 +56,49 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
   );
   const lastFeedbackMessageRef = useRef('');
   const sessionStartTimeRef = useRef<number | null>(null);
+  const currentSlideRef = useRef<number | null>(null);
+  const transcriptSegmentsRef = useRef<Array<Omit<RunTranscriptSegment, 'runId'>>>([]);
+  const transcriptSequenceRef = useRef(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingMimeTypeRef = useRef('video/webm');
+  const activeRecordingStreamRef = useRef<MediaStream | null>(null);
 
   const [indicators, setIndicators] = useState<IndicatorData | null>(null);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
   const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
   const [analysisLoading, setAnalysisLoading] = useState(true);
+  const [memoryBySlide, setMemoryBySlide] = useState<Record<number, LiveMemoryCue[]> | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(true);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
 
   useEffect(() => {
     let isActive = true;
     setAnalysisLoading(true);
-    api.getProjectAnalysis(project.id)
-      .then((result) => {
-        if (isActive) setAnalysis(result);
-      })
-      .catch((error) => {
-        console.warn('Failed to load project analysis for rehearsal context', error);
-        if (isActive) setAnalysis(null);
+    setMemoryLoading(true);
+    Promise.allSettled([
+      api.getProjectAnalysis(project.id),
+      api.getProjectMemory(project.id),
+    ])
+      .then(([analysisResult, memoryResult]) => {
+        if (!isActive) return;
+        if (analysisResult.status === 'fulfilled') {
+          setAnalysis(analysisResult.value);
+        } else {
+          console.warn('Failed to load project analysis for rehearsal context', analysisResult.reason);
+          setAnalysis(null);
+        }
+        if (memoryResult.status === 'fulfilled') {
+          setMemoryBySlide(memoryResult.value);
+        } else {
+          console.warn('Failed to load rehearsal memory', memoryResult.reason);
+          setMemoryBySlide(null);
+        }
       })
       .finally(() => {
-        if (isActive) setAnalysisLoading(false);
+        if (!isActive) return;
+        setAnalysisLoading(false);
+        setMemoryLoading(false);
       });
 
     return () => {
@@ -83,7 +118,11 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     );
   }
 
-  const contextText = useMemo(() => buildRehearsalContext(project, analysis), [project, analysis]);
+  const contextText = useMemo(() => buildRehearsalContext(project, analysis, memoryBySlide), [project, analysis, memoryBySlide]);
+  const activeMemoryCue = useMemo(
+    () => resolveLiveMemoryCue(memoryBySlide, indicators?.currentSlide ?? null),
+    [indicators?.currentSlide, memoryBySlide],
+  );
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
@@ -95,6 +134,46 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
       videoRef.current.srcObject = null;
     }
   }, []);
+
+  const releaseRecordingCapture = useCallback(() => {
+    mediaRecorderRef.current = null;
+    activeRecordingStreamRef.current = null;
+  }, []);
+
+  const stopRecordingCapture = useCallback((options?: { preserveRecorder?: boolean }) => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    if (!options?.preserveRecorder) {
+      releaseRecordingCapture();
+    } else {
+      activeRecordingStreamRef.current = null;
+    }
+  }, [releaseRecordingCapture]);
+
+  const startRecordingCapture = useCallback((stream: MediaStream | null) => {
+    if (!stream || activeRecordingStreamRef.current === stream || typeof MediaRecorder === 'undefined') return;
+    stopRecordingCapture();
+    recordingChunksRef.current = [];
+    activeRecordingStreamRef.current = stream;
+    const mimeType = pickSupportedRecordingMimeType(stream);
+    recordingMimeTypeRef.current = mimeType;
+
+    try {
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.start(1000);
+      mediaRecorderRef.current = recorder;
+    } catch (error) {
+      console.warn('Failed to start run recording capture', error);
+      activeRecordingStreamRef.current = null;
+    }
+  }, [stopRecordingCapture]);
 
   const startPreview = useCallback(async () => {
     if (previewStreamRef.current || liveSessionActiveRef.current) return;
@@ -116,6 +195,7 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
   const handleIndicatorsUpdate = useCallback((update: IndicatorUpdate) => {
     setIndicators((previous) => {
       const next = mergeIndicatorData(previous, update);
+      currentSlideRef.current = next.currentSlide;
       ingestIndicatorSample(metricsTrackerRef.current, next);
 
       const feedbackMessage = update.feedbackMessage?.trim();
@@ -144,6 +224,7 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
   const {
     isConnected,
     isConnecting,
+    isReconnecting,
     error,
     connect,
     disconnect,
@@ -157,6 +238,21 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     onSlideAnalysis: (payload) => {
       slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
     },
+    onTranscriptSegment: ({ text, capturedAt }) => {
+      const segment = buildTranscriptSegmentDraft({
+        text,
+        capturedAt,
+        sessionStartTime: sessionStartTimeRef.current,
+        slideNumber: currentSlideRef.current,
+        sequence: transcriptSequenceRef.current,
+      });
+      transcriptSequenceRef.current += 1;
+      transcriptSegmentsRef.current.push(segment);
+    },
+    onMediaStream: (stream) => {
+      if (stream) startRecordingCapture(stream);
+      else stopRecordingCapture({ preserveRecorder: true });
+    },
   });
 
   useEffect(() => {
@@ -164,8 +260,11 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
-    return () => stopPreview();
-  }, [stopPreview]);
+    return () => {
+      stopPreview();
+      stopRecordingCapture();
+    };
+  }, [stopPreview, stopRecordingCapture]);
 
   useEffect(() => {
     if (isConnected || isConnecting) {
@@ -184,7 +283,10 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     metricsTrackerRef.current = createSessionMetricsTracker();
     feedbackPayloadRef.current = [];
     slideAnalysisMapRef.current = new Map();
+    transcriptSegmentsRef.current = [];
+    transcriptSequenceRef.current = 0;
     lastFeedbackMessageRef.current = '';
+    currentSlideRef.current = null;
     setIndicators(null);
     setFeedbackHistory([]);
     setSessionStartTime(now);
@@ -216,15 +318,65 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
     window.squaredElectron?.setAppStatus?.({ mode: 'idle', connected: false });
   }, []);
 
+  const uploadRecordingArtifact = useCallback(async (runId: string): Promise<Omit<RunArtifact, 'createdAt' | 'runId'> | null> => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return null;
+
+    const artifact = await new Promise<Omit<RunArtifact, 'createdAt' | 'runId'> | null>((resolve) => {
+      const finalize = async () => {
+        const blob = new Blob(recordingChunksRef.current, { type: recordingMimeTypeRef.current || 'video/webm' });
+        recordingChunksRef.current = [];
+        if (blob.size === 0) {
+          resolve(null);
+          return;
+        }
+
+        try {
+          const uploaded = await api.uploadRunArtifact(runId, blob, {
+            kind: 'full_recording',
+            startMs: 0,
+            endMs: sessionStartTimeRef.current ? Date.now() - sessionStartTimeRef.current : null,
+            fileName: blob.type.startsWith('audio/') ? `${runId}.audio.webm` : `${runId}.video.webm`,
+          });
+          resolve({
+            id: uploaded.id,
+            kind: uploaded.kind,
+            mimeType: uploaded.mimeType,
+            filePath: uploaded.filePath,
+            startMs: uploaded.startMs,
+            endMs: uploaded.endMs,
+          });
+        } catch (error) {
+          console.error('Failed to upload rehearsal recording artifact:', error);
+          resolve(null);
+        }
+      };
+
+      recorder.addEventListener('stop', () => {
+        void finalize();
+      }, { once: true });
+
+      if (recorder.state === 'inactive') {
+        void finalize();
+      } else {
+        recorder.stop();
+      }
+    });
+
+    releaseRecordingCapture();
+    return artifact;
+  }, [releaseRecordingCapture]);
+
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
-      disconnect();
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
+        const runId = crypto.randomUUID();
         try {
+          const artifact = await uploadRecordingArtifact(runId);
           await api.saveRun({
             run: {
-              id: crypto.randomUUID(),
+              id: runId,
               projectId: project.id,
               mode: 'rehearsal',
               duration,
@@ -232,12 +384,18 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
             },
             feedbacks: feedbackPayloadRef.current,
             slideAnalyses: Array.from(slideAnalysisMapRef.current.values()),
+            artifacts: artifact ? [artifact] : [],
+            transcriptSegments: transcriptSegmentsRef.current,
           });
+          void api.getProjectMemory(project.id)
+            .then((memory) => setMemoryBySlide(memory))
+            .catch((error) => console.warn('Failed to refresh rehearsal memory', error));
         } catch (saveError) {
           console.error('Failed to save rehearsal session:', saveError);
         }
         onSessionEnd();
       }
+      disconnect();
       return;
     }
 
@@ -265,9 +423,9 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
           <span className="text-xs uppercase tracking-wider text-zinc-600">Rehearsal</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
+          <div className={`w-1.5 h-1.5 rounded-full ${isReconnecting ? 'bg-amber-400 animate-pulse' : isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
           <span className="text-xs text-zinc-500">
-            {isConnecting ? 'Connecting' : isConnected ? (isSpeaking ? 'Coach speaking' : 'Live') : 'Ready'}
+            {isReconnecting ? 'Reconnecting...' : isConnecting ? 'Connecting' : isConnected ? (isSpeaking ? 'Coach speaking' : 'Live') : 'Ready'}
           </span>
         </div>
       </header>
@@ -341,6 +499,30 @@ export function RehearsalMode({ project, onBack, onSessionEnd }: RehearsalModePr
               </div>
             </div>
           )}
+
+          <div className="px-4 py-3 border-b border-zinc-800/40">
+            <div className="flex items-center gap-2 mb-2">
+              <History className="w-3.5 h-3.5 text-emerald-400" />
+              <p className="text-[10px] uppercase tracking-wider text-zinc-600">Memory</p>
+            </div>
+            {activeMemoryCue ? (
+              <div className="rounded-xl bg-zinc-950/50 border border-zinc-800/60 px-3 py-2.5">
+                <p className="text-[11px] text-emerald-300 font-medium">
+                  {activeMemoryCue.slideNumber != null ? `Slide ${activeMemoryCue.slideNumber}` : 'General memory'}
+                </p>
+                <p className="mt-1 text-xs text-zinc-200 leading-relaxed">{activeMemoryCue.cueText}</p>
+                <p className="mt-2 text-[11px] text-zinc-500 line-clamp-2">{activeMemoryCue.supportingText}</p>
+              </div>
+            ) : memoryLoading ? (
+              <p className="text-xs text-zinc-500">Loading rehearsal memory…</p>
+            ) : (
+              <p className="text-xs text-zinc-500">
+                {indicators?.currentSlide != null
+                  ? 'No historical cue for this slide yet.'
+                  : 'Memory cues will appear when you reach a slide with prior history.'}
+              </p>
+            )}
+          </div>
 
           {/* Session insights — fills remaining space */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
