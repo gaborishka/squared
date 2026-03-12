@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Router } from 'express';
 import multer from 'multer';
 import type { RunArtifact, SaveRunPayload } from '../../shared/types.js';
+import { queryRows } from '../db/database.js';
 import { getRunArtifactsDir } from '../config/paths.js';
 import { getRun, isRunOwnedBy, listRuns, saveRun } from '../db/queries.js';
 import { indexRunMemory } from '../services/runMemory.js';
@@ -70,6 +71,26 @@ runsRouter.post('/artifacts', upload.single('file'), async (req, res) => {
     endMs,
     createdAt: new Date().toISOString(),
   };
+
+  try {
+    await queryRows(
+      `INSERT INTO run_artifacts (id, run_id, kind, mime_type, file_path, start_ms, end_ms)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [artifact.id, artifact.runId, artifact.kind, artifact.mimeType, artifact.filePath, artifact.startMs, artifact.endMs],
+    );
+  } catch (error) {
+    console.error('Failed to persist run artifact metadata', error);
+    await fs.rm(targetPath, { force: true }).catch(() => {});
+    res.status(500).json({ error: 'Failed to persist run artifact.' });
+    return;
+  }
+
+  const run = await getRun(runId);
+  if (run?.projectId) {
+    void indexRunMemory(runId).catch((error) => {
+      console.error(`Failed to reindex run memory for ${runId} after artifact upload:`, error);
+    });
+  }
 
   res.status(201).json(artifact);
 });

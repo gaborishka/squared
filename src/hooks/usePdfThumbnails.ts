@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { api } from '../api/client';
+import { authenticatedFetch } from '../api/client';
 import type { ProjectDetails } from '../types';
 
 GlobalWorkerOptions.workerSrc = new URL(
@@ -15,8 +15,12 @@ export function useSlidePreviews(project: Pick<ProjectDetails, 'id' | 'fileType'
   const [thumbnails, setThumbnails] = useState<Map<number, string>>(new Map());
   const [loading, setLoading] = useState(false);
   const pdfRef = useRef<PDFDocumentProxy | null>(null);
+  const objectUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current = [];
+
     if (!project?.id || !project.fileType) {
       setThumbnails(new Map());
       setLoading(false);
@@ -33,9 +37,13 @@ export function useSlidePreviews(project: Pick<ProjectDetails, 'id' | 'fileType'
         try {
           const entries = await Promise.all(
             project.slides.map(async (slide) => {
-              const url = api.getProjectSlidePreviewUrl(projectId, slide.slideNumber);
-              const response = await fetch(url, { method: 'HEAD' });
-              return response.ok ? [slide.slideNumber, url] as const : null;
+              const response = await authenticatedFetch(`/api/projects/${projectId}/slides/${slide.slideNumber}/preview`);
+              if (!response.ok) return null;
+
+              const blob = await response.blob();
+              const objectUrl = URL.createObjectURL(blob);
+              objectUrlsRef.current.push(objectUrl);
+              return [slide.slideNumber, objectUrl] as const;
             }),
           );
 
@@ -64,8 +72,7 @@ export function useSlidePreviews(project: Pick<ProjectDetails, 'id' | 'fileType'
 
     async function render() {
       try {
-        const url = api.getProjectFileUrl(projectId);
-        const response = await fetch(url);
+        const response = await authenticatedFetch(`/api/projects/${projectId}/file`);
         if (!response.ok) throw new Error('Failed to fetch PDF');
         const buffer = await response.arrayBuffer();
 
@@ -102,6 +109,8 @@ export function useSlidePreviews(project: Pick<ProjectDetails, 'id' | 'fileType'
 
     return () => {
       cancelled = true;
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current = [];
       pdfRef.current?.destroy();
       pdfRef.current = null;
     };

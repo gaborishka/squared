@@ -44,14 +44,25 @@ function clearDesktopSessionId(): void {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
+function applyDesktopSessionHeaders(headers: Headers): Headers {
   const desktopSessionId = getDesktopSessionId();
   if (desktopSessionId) {
     headers.set('x-squared-session', desktopSessionId);
   }
+  return headers;
+}
 
-  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...init, headers });
+export function createAuthenticatedHeaders(init?: HeadersInit): Headers {
+  return applyDesktopSessionHeaders(new Headers(init));
+}
+
+export async function authenticatedFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = createAuthenticatedHeaders(init?.headers);
+  return fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...init, headers });
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await authenticatedFetch(path, init);
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(errorText || `Request failed with ${response.status}`);

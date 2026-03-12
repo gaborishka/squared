@@ -386,7 +386,6 @@ export function DesktopRehearsalMode({
         const duration = Date.now() - sessionStartTimeRef.current;
         const runId = crypto.randomUUID();
         try {
-          const artifact = await uploadRecordingArtifact(runId);
           await api.saveRun({
             run: {
               id: runId,
@@ -397,9 +396,10 @@ export function DesktopRehearsalMode({
             },
             feedbacks: feedbackPayloadRef.current,
             slideAnalyses: Array.from(slideAnalysisMapRef.current.values()),
-            artifacts: artifact ? [artifact] : [],
+            artifacts: [],
             transcriptSegments: transcriptSegmentsRef.current,
           });
+          await uploadRecordingArtifact(runId);
           void api.getProjectMemory(project.id)
             .then((memory) => setMemoryBySlide(memory))
             .catch((error) => console.warn('Failed to refresh rehearsal memory', error));
@@ -421,8 +421,8 @@ export function DesktopRehearsalMode({
   handleToggleConnectRef.current = handleToggleConnect;
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-950">
-      <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60">
+    <div className="h-screen flex flex-col bg-zinc-950 overflow-hidden">
+      <header className="shrink-0 flex items-center justify-between px-5 py-3 border-b border-zinc-800/60">
         <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
           <ArrowLeft className="w-4 h-4" />
           <span>Back</span>

@@ -270,7 +270,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
   const data = indicators ?? DEFAULT_INDICATORS;
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-950">
+    <div className="h-screen flex flex-col bg-zinc-950 overflow-hidden">
       {/* Header */}
       <header className="flex items-center justify-between px-5 py-3 border-b border-zinc-800/60 shrink-0">
         <button onClick={onBack} className="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-200 transition-colors text-sm">
@@ -350,7 +350,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
         <aside className="w-[280px] shrink-0 flex flex-col m-3 ml-3 rounded-2xl bg-zinc-900/50 border border-zinc-800/40 overflow-hidden">
           {isConnected ? (
             /* ──── Live session panel ──── */
-            <>
+            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
               {/* Current slide context */}
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <div className="flex items-center justify-between">
@@ -437,7 +437,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                   </p>
                 )}
               </div>
-            </>
+            </div>
           ) : isConnecting ? (
             /* ──── Connecting state ──── */
             <div className="flex-1 flex items-center justify-center">
@@ -445,7 +445,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
             </div>
           ) : (
             /* ──── Pre-session state ──── */
-            <>
+            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col">
               <div className="px-4 py-3 border-b border-zinc-800/40">
                 <p className="text-[10px] uppercase tracking-wider text-zinc-600">Game plan</p>
                 <p className="text-sm font-medium text-zinc-300 mt-1">{project.name}</p>
@@ -497,7 +497,7 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                   </div>
                 </div>
               </div>
-            </>
+            </div>
           )}
         </aside>
       </main>

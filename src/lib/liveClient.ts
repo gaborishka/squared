@@ -1,11 +1,10 @@
 import { GoogleGenAI } from '@google/genai';
 import type { LiveAuthTokenResponse, LiveSessionKind } from '../types';
-import { API_BASE_URL } from '../api/client';
+import { authenticatedFetch } from '../api/client';
 
 async function requestLiveAuthToken(kind: LiveSessionKind): Promise<LiveAuthTokenResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/live/auth-token`, {
+  const response = await authenticatedFetch('/api/live/auth-token', {
     method: 'POST',
-    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
     },
