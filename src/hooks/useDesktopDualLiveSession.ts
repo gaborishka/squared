@@ -71,6 +71,7 @@ export function useDesktopDualLiveSession({
   const {
     isConnected: isDeliveryConnected,
     isConnecting: isDeliveryConnecting,
+    isReconnecting: isDeliveryReconnecting,
     isSpeaking,
     error: deliveryError,
     connect: connectDelivery,
@@ -207,6 +208,7 @@ export function useDesktopDualLiveSession({
   return {
     isConnected: isDeliveryConnected,
     isConnecting: isDeliveryConnecting || isAudienceConnecting,
+    isReconnecting: isDeliveryReconnecting,
     isSpeaking,
     error: deliveryError ?? audienceError,
     connect,

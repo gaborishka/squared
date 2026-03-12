@@ -56,8 +56,147 @@ export function useAudienceLiveAPI({
   const isSessionReadyRef = useRef(false);
   const suppressTrackEndedRef = useRef(false);
   const trackEndedHandlersRef = useRef(new Map<MediaStreamTrack, () => void>());
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const sourceLabelRef = useRef('');
+
+  // Session management refs
+  const resumptionHandleRef = useRef<string | null>(null);
+  const isReconnectingRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const userInitiatedDisconnectRef = useRef(false);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const connectConfigRef = useRef<any>(null);
+  const reconnectRef = useRef<() => void>(() => {});
+
+  // Callback ref to avoid stale closures
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
+
+  const isSessionTransportOpen = useCallback((session: any) => {
+    const readyState = session?.conn?.ws?.readyState;
+    return typeof readyState === 'number' ? readyState === 1 : isSocketOpenRef.current;
+  }, []);
+
+  const withOpenSession = useCallback((handler: (session: any) => void) => {
+    const currentPromise = sessionRef.current;
+    if (!currentPromise || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
+    currentPromise.then((session: any) => {
+      if (sessionRef.current !== currentPromise || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
+      if (!isSessionTransportOpen(session)) return;
+      handler(session);
+    });
+  }, [isSessionTransportOpen]);
+
+  const closeSession = useCallback(() => {
+    const currentSessionPromise = sessionRef.current;
+    sessionRef.current = null;
+    isSocketOpenRef.current = false;
+    isSessionReadyRef.current = false;
+    if (currentSessionPromise) {
+      currentSessionPromise.then((session: any) => {
+        try { session.close(); } catch {}
+      });
+    }
+  }, []);
+
+  const handleServerMessage = useCallback((
+    message: LiveServerMessage,
+    sessionPromise: Promise<any>,
+  ) => {
+    if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+
+    if (message.setupComplete) {
+      isSessionReadyRef.current = true;
+
+      // Kick-start observation
+      withOpenSession((s) => {
+        try {
+          s.sendClientContent({
+            turns: [{ role: 'user', parts: [{ text: 'Audience gallery view is now visible. Begin observing. Call updateAudienceState with your initial assessment of engagement, reactions, and hands raised.' }] }],
+            turnComplete: true,
+          });
+        } catch { /* ignore */ }
+      });
+
+      // Periodic nudge every 15s
+      if (nudgeIntervalRef.current) {
+        clearInterval(nudgeIntervalRef.current);
+      }
+      nudgeIntervalRef.current = window.setInterval(() => {
+        withOpenSession((s) => {
+          try {
+            s.sendClientContent({
+              turns: [{ role: 'user', parts: [{ text: 'Call updateAudienceState now with your current assessment of engagement, reactions, and handsRaised. Always set these indicator fields.' }] }],
+              turnComplete: true,
+            });
+          } catch { /* ignore */ }
+        });
+      }, 15_000);
+    }
+
+    // Save resumption handle for transparent reconnect
+    const msgAny = message as any;
+    if (msgAny.sessionResumptionUpdate) {
+      const { newHandle, resumable } = msgAny.sessionResumptionUpdate;
+      if (resumable !== false && newHandle) {
+        resumptionHandleRef.current = newHandle;
+        console.debug('[AudienceAgent] Resumption handle saved');
+      }
+    }
+
+    // Server signals imminent disconnect — attempt reconnect
+    if (msgAny.goAway) {
+      console.warn('[AudienceAgent] Received goAway from server');
+      if (!isReconnectingRef.current) {
+        reconnectRef.current();
+      }
+    }
+
+    if (message.toolCall) {
+      const sourceLabel = sourceLabelRef.current;
+      for (const call of message.toolCall.functionCalls) {
+        if (call.name === 'updateAudienceState' && onUpdateRef.current && call.args && typeof call.args === 'object') {
+          const args = call.args as Record<string, unknown>;
+          onUpdateRef.current({
+            captureStatus: typeof args.captureStatus === 'string' ? args.captureStatus as AudienceAgentUpdate['captureStatus'] : undefined,
+            engagement: typeof args.engagement === 'string' ? args.engagement as AudienceAgentUpdate['engagement'] : undefined,
+            reactions: typeof args.reactions === 'string' ? args.reactions : undefined,
+            handsRaised: typeof args.handsRaised === 'number' ? args.handsRaised : undefined,
+            audiencePrompt: typeof args.audiencePrompt === 'string' ? args.audiencePrompt : undefined,
+            audienceDetails: typeof args.audienceDetails === 'string' ? args.audienceDetails : undefined,
+            priority: typeof args.priority === 'string' ? args.priority as AudienceAgentUpdate['priority'] : undefined,
+            sourceLabel: typeof args.sourceLabel === 'string' ? args.sourceLabel : sourceLabel,
+          });
+        }
+
+        withOpenSession((session) => {
+          try {
+            session.sendToolResponse({
+              functionResponses: [{
+                id: call.id,
+                name: call.name,
+                response: { result: 'ok' },
+                scheduling: FunctionResponseScheduling.SILENT,
+              }],
+            });
+          } catch {
+            // ignore
+          }
+        });
+      }
+    }
+  }, [withOpenSession]);
 
   const disconnect = useCallback((options?: { skipSessionClose?: boolean; preserveLostState?: boolean }) => {
+    userInitiatedDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current !== null) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    isReconnectingRef.current = false;
+    reconnectAttemptsRef.current = 0;
+    resumptionHandleRef.current = null;
+
     const shouldCloseSession = !options?.skipSessionClose;
     const currentSessionPromise = sessionRef.current;
     sessionRef.current = null;
@@ -106,6 +245,7 @@ export function useAudienceLiveAPI({
       audioStreamRef.current.getTracks().forEach((track) => track.stop());
       audioStreamRef.current = null;
     }
+    audioWorkletNodeRef.current = null;
     setIsConnected(false);
     setIsConnecting(false);
     suppressTrackEndedRef.current = false;
@@ -119,6 +259,138 @@ export function useAudienceLiveAPI({
     }
   }, [onUpdate]);
 
+  const doReconnect = useCallback(async () => {
+    if (isReconnectingRef.current) return;
+    if (!connectConfigRef.current) return;
+
+    isReconnectingRef.current = true;
+    console.log(`[AudienceAgent] Reconnecting (attempt ${reconnectAttemptsRef.current + 1}, ${resumptionHandleRef.current ? 'resuming session' : 'fresh session'})...`);
+
+    closeSession();
+
+    const storedConfig = connectConfigRef.current;
+
+    const config = {
+      ...storedConfig.config,
+      sessionResumption: {
+        handle: resumptionHandleRef.current || undefined,
+      },
+    };
+
+    try {
+      const ai = await createBrowserLiveClient('audience');
+      const sessionPromise = ai.live.connect({
+        model: storedConfig.model,
+        config,
+        callbacks: {
+          onopen: () => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.log(`[AudienceAgent] Reconnected at ${new Date().toISOString()}`);
+            isSocketOpenRef.current = true;
+            isSessionReadyRef.current = false;
+            reconnectAttemptsRef.current = 0;
+            isReconnectingRef.current = false;
+            onUpdateRef.current?.({
+              captureStatus: 'active',
+              priority: 'info',
+              sourceLabel: sourceLabelRef.current,
+            });
+            // Re-bind worklet to new session
+            const worklet = audioWorkletNodeRef.current;
+            if (worklet) {
+              worklet.port.onmessage = (event) => {
+                const pcm16 = new Int16Array(event.data);
+                const bytes = new Uint8Array(pcm16.buffer);
+                let binaryString = '';
+                for (let i = 0; i < bytes.length; i++) {
+                  binaryString += String.fromCharCode(bytes[i]);
+                }
+                const base64Data = btoa(binaryString);
+                withOpenSession((session) => {
+                  try {
+                    session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'audio/pcm;rate=16000' } });
+                  } catch {
+                    // ignore
+                  }
+                });
+              };
+            }
+          },
+          onmessage: (message: LiveServerMessage) => {
+            handleServerMessage(message, sessionPromise);
+          },
+          onclose: (event: CloseEvent) => {
+            if (sessionRef.current !== sessionPromise) return;
+            if (userInitiatedDisconnectRef.current) return;
+            console.debug('[AudienceAgent] Reconnected session closed', { code: event.code, reason: event.reason });
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[AudienceAgent] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              // Audience agent failure is non-fatal — just report lost state
+              onUpdateRef.current?.({
+                captureStatus: 'lost',
+                priority: 'watch',
+                audiencePrompt: '',
+                audienceDetails: 'Audience monitoring connection lost.',
+                sourceLabel: sourceLabelRef.current,
+              });
+              disconnect({ skipSessionClose: true, preserveLostState: true });
+            }
+          },
+          onerror: (err: any) => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.error('[AudienceAgent] Reconnect error:', err);
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              onUpdateRef.current?.({
+                captureStatus: 'lost',
+                priority: 'watch',
+                audiencePrompt: '',
+                audienceDetails: 'Audience monitoring connection lost.',
+                sourceLabel: sourceLabelRef.current,
+              });
+              disconnect({ skipSessionClose: true, preserveLostState: true });
+            }
+          },
+        },
+      });
+      sessionRef.current = sessionPromise;
+    } catch (err: any) {
+      console.error('[AudienceAgent] Reconnect failed:', err);
+      isReconnectingRef.current = false;
+      if (reconnectAttemptsRef.current < 3) {
+        reconnectAttemptsRef.current++;
+        const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+        reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+      } else {
+        onUpdateRef.current?.({
+          captureStatus: 'lost',
+          priority: 'watch',
+          audiencePrompt: '',
+          audienceDetails: 'Audience monitoring connection lost.',
+          sourceLabel: sourceLabelRef.current,
+        });
+        disconnect({ skipSessionClose: true, preserveLostState: true });
+      }
+    }
+  }, [closeSession, disconnect, handleServerMessage, withOpenSession]);
+
+  reconnectRef.current = doReconnect;
+
   const connect = useCallback(async ({
     displayStream,
     audioStream,
@@ -128,6 +400,8 @@ export function useAudienceLiveAPI({
   }): Promise<boolean> => {
     setIsConnecting(true);
     setError(null);
+    userInitiatedDisconnectRef.current = false;
+    reconnectAttemptsRef.current = 0;
     suppressTrackEndedRef.current = false;
     onUpdate?.({
       captureStatus: 'requesting',
@@ -140,6 +414,7 @@ export function useAudienceLiveAPI({
       const ai = await createBrowserLiveClient('audience');
 
       const sourceLabel = displayStream.getVideoTracks()[0]?.label ?? '';
+      sourceLabelRef.current = sourceLabel;
       displayStreamRef.current = displayStream;
       audioStreamRef.current = audioStream ?? null;
       const videoElement = document.createElement('video');
@@ -181,6 +456,7 @@ export function useAudienceLiveAPI({
         }
         audioWorkletNode = new AudioWorkletNode(audioContext, 'audience-pcm-processor');
         source.connect(audioWorkletNode);
+        audioWorkletNodeRef.current = audioWorkletNode;
       }
 
       const MAX_CONTEXT_CHARS = 12000;
@@ -191,16 +467,8 @@ export function useAudienceLiveAPI({
         ? `${getAudienceBaseInstruction(mode)}\n\nUse the following project context while reasoning about the audience:\n${trimmedContext}`
         : getAudienceBaseInstruction(mode);
 
-      let sessionPromise: Promise<any>;
-      const withOpenSession = (handler: (session: any) => void) => {
-        sessionPromise.then((session) => {
-          if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
-          handler(session);
-        });
-      };
-
       const handleTrackEnded = () => {
-        onUpdate?.({
+        onUpdateRef.current?.({
           captureStatus: 'lost',
           priority: 'critical',
           audiencePrompt: 'Audience view lost',
@@ -220,11 +488,19 @@ export function useAudienceLiveAPI({
         track.addEventListener('ended', wrapped, { once: true });
       });
 
+      let sessionPromise: Promise<any>;
+
       sessionPromise = ai.live.connect({
         model: AUDIENCE_LIVE_MODEL,
         config: {
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
+          sessionResumption: {
+            handle: resumptionHandleRef.current || undefined,
+          },
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
           realtimeInputConfig: {
             activityHandling: ActivityHandling.NO_INTERRUPTION,
             turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
@@ -286,7 +562,7 @@ export function useAudienceLiveAPI({
             isSessionReadyRef.current = false;
             setIsConnected(true);
             setIsConnecting(false);
-            onUpdate?.({
+            onUpdateRef.current?.({
               captureStatus: 'active',
               priority: 'info',
               sourceLabel,
@@ -330,93 +606,112 @@ export function useAudienceLiveAPI({
             }, AUDIENCE_FRAME_INTERVAL_MS);
           },
           onmessage: (message: LiveServerMessage) => {
-            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-
-            if (message.setupComplete) {
-              isSessionReadyRef.current = true;
-
-              // Kick-start observation — without this the model may not proactively call the tool.
-              withOpenSession((s) => {
-                try {
-                  s.sendClientContent({
-                    turns: [{ role: 'user', parts: [{ text: 'Audience gallery view is now visible. Begin observing. Call updateAudienceState with your initial assessment of engagement, reactions, and hands raised.' }] }],
-                    turnComplete: true,
-                  });
-                } catch { /* ignore */ }
-              });
-
-              // Periodic nudge every 15s to keep the model calling tools frequently.
-              nudgeIntervalRef.current = window.setInterval(() => {
-                withOpenSession((s) => {
-                  try {
-                    s.sendClientContent({
-                      turns: [{ role: 'user', parts: [{ text: 'Call updateAudienceState now with your current assessment of engagement, reactions, and handsRaised. Always set these indicator fields.' }] }],
-                      turnComplete: true,
-                    });
-                  } catch { /* ignore */ }
-                });
-              }, 15_000);
-            }
-
-            if (message.serverContent?.modelTurn) {
-              // AudienceAgent is tool-only; ignore generated content payloads.
-            }
-
-            if (message.toolCall) {
-              for (const call of message.toolCall.functionCalls) {
-                if (call.name === 'updateAudienceState' && onUpdate && call.args && typeof call.args === 'object') {
-                  const args = call.args as Record<string, unknown>;
-                  onUpdate({
-                    captureStatus: typeof args.captureStatus === 'string' ? args.captureStatus as AudienceAgentUpdate['captureStatus'] : undefined,
-                    engagement: typeof args.engagement === 'string' ? args.engagement as AudienceAgentUpdate['engagement'] : undefined,
-                    reactions: typeof args.reactions === 'string' ? args.reactions : undefined,
-                    handsRaised: typeof args.handsRaised === 'number' ? args.handsRaised : undefined,
-                    audiencePrompt: typeof args.audiencePrompt === 'string' ? args.audiencePrompt : undefined,
-                    audienceDetails: typeof args.audienceDetails === 'string' ? args.audienceDetails : undefined,
-                    priority: typeof args.priority === 'string' ? args.priority as AudienceAgentUpdate['priority'] : undefined,
-                    sourceLabel: typeof args.sourceLabel === 'string' ? args.sourceLabel : sourceLabel,
-                  });
-                }
-
-                withOpenSession((session) => {
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: call.id,
-                        name: call.name,
-                        response: { result: 'ok' },
-                        scheduling: FunctionResponseScheduling.SILENT,
-                      }],
-                    });
-                  } catch {
-                    // ignore
-                  }
-                });
-              }
-            }
+            handleServerMessage(message, sessionPromise);
           },
           onclose: (event: CloseEvent) => {
             if (sessionRef.current !== sessionPromise) return;
-            if (!isSessionReadyRef.current && event.code !== 1000) {
-              const reason = event.reason?.trim();
-              setError(reason ? `Audience session closed before setup: ${reason}` : `Audience session closed before setup (code ${event.code})`);
-            }
+            const wasReady = isSessionReadyRef.current;
+            console.debug('[AudienceAgent] Session closed', { code: event.code, reason: event.reason, wasReady });
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (userInitiatedDisconnectRef.current) return;
+            if (!wasReady && event.code !== 1000) {
+              const reason = event.reason?.trim();
+              setError(reason ? `Audience session closed before setup: ${reason}` : `Audience session closed before setup (code ${event.code})`);
+              disconnect({ skipSessionClose: true });
+              return;
+            }
+            if (isReconnectingRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[AudienceAgent] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              onUpdateRef.current?.({
+                captureStatus: 'lost',
+                priority: 'watch',
+                audiencePrompt: '',
+                audienceDetails: 'Audience monitoring connection lost.',
+                sourceLabel: sourceLabelRef.current,
+              });
+              disconnect({ skipSessionClose: true, preserveLostState: true });
+            }
           },
           onerror: (err: any) => {
             if (sessionRef.current !== sessionPromise) return;
             console.error('Audience Live API Error:', err);
-            setError(err.message || 'An error occurred');
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (userInitiatedDisconnectRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              onUpdateRef.current?.({
+                captureStatus: 'lost',
+                priority: 'watch',
+                audiencePrompt: '',
+                audienceDetails: 'Audience monitoring connection lost.',
+                sourceLabel: sourceLabelRef.current,
+              });
+              disconnect({ skipSessionClose: true, preserveLostState: true });
+            }
           },
         },
       });
 
       sessionRef.current = sessionPromise;
+      connectConfigRef.current = {
+        model: AUDIENCE_LIVE_MODEL,
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
+          realtimeInputConfig: {
+            activityHandling: ActivityHandling.NO_INTERRUPTION,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            automaticActivityDetection: {
+              disabled: false,
+              silenceDurationMs: 400,
+              prefixPaddingMs: 20,
+            },
+          },
+          systemInstruction,
+          tools: [{
+            functionDeclarations: [{
+              name: 'updateAudienceState',
+              description: 'Update audience engagement observations from the video call gallery view.',
+              behavior: Behavior.NON_BLOCKING,
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  captureStatus: {
+                    type: Type.STRING,
+                    enum: ['inactive', 'requesting', 'active', 'lost', 'denied', 'unsupported'],
+                  },
+                  engagement: {
+                    type: Type.STRING,
+                    enum: ['high', 'moderate', 'low'],
+                  },
+                  reactions: { type: Type.STRING },
+                  handsRaised: { type: Type.INTEGER },
+                  audiencePrompt: { type: Type.STRING },
+                  audienceDetails: { type: Type.STRING },
+                  priority: {
+                    type: Type.STRING,
+                    enum: ['info', 'watch', 'critical'],
+                  },
+                },
+              },
+            }],
+          }],
+        },
+      };
       return true;
     } catch (err: any) {
       console.error(err);
@@ -424,7 +719,7 @@ export function useAudienceLiveAPI({
       disconnect({ skipSessionClose: true });
       return false;
     }
-  }, [contextText, disconnect, mode, onUpdate]);
+  }, [contextText, disconnect, handleServerMessage, mode, onUpdate, withOpenSession]);
 
   return {
     isConnected,

@@ -322,6 +322,26 @@ export function useDeliveryLiveAPI({
   const cueTimerRef = useRef<number | null>(null);
   const pendingContextNotesRef = useRef<string[]>([]);
 
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
+  // Session management refs
+  const resumptionHandleRef = useRef<string | null>(null);
+  const isReconnectingRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const userInitiatedDisconnectRef = useRef(false);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const connectConfigRef = useRef<any>(null);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const reconnectRef = useRef<() => void>(() => {});
+
+  // Callback refs to avoid stale closures
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
+  const onSlideAnalysisRef = useRef(onSlideAnalysis);
+  onSlideAnalysisRef.current = onSlideAnalysis;
+  const ingestInputTranscriptRef = useRef<(text: string) => void>(() => {});
+
   const resetDerivedIndicatorsState = useCallback(() => {
     recentWordTimestampsRef.current = [];
     fillerBreakdownRef.current = {};
@@ -358,7 +378,261 @@ export function useDeliveryLiveAPI({
     }
   }, []);
 
+  const pushContextNote = useCallback((note: string) => {
+    const trimmed = note.trim();
+    if (!trimmed) return;
+    const currentSession = sessionRef.current;
+    if (!currentSession || !isSocketOpenRef.current || !isSessionReadyRef.current) {
+      pendingContextNotesRef.current.push(trimmed);
+      return;
+    }
+
+    currentSession.then((session) => {
+      if (sessionRef.current !== currentSession || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
+      try {
+        session.sendClientContent({
+          turns: [{ role: 'user', parts: [{ text: trimmed }] }],
+          turnComplete: true,
+        });
+      } catch {
+        pendingContextNotesRef.current.push(trimmed);
+      }
+    });
+  }, []);
+
+  const isSessionTransportOpen = useCallback((session: any) => {
+    const readyState = session?.conn?.ws?.readyState;
+    return typeof readyState === 'number' ? readyState === 1 : isSocketOpenRef.current;
+  }, []);
+
+  const withOpenSession = useCallback((handler: (session: any) => void) => {
+    const currentPromise = sessionRef.current;
+    if (!currentPromise || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
+    currentPromise.then((session: any) => {
+      if (sessionRef.current !== currentPromise || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
+      if (!isSessionTransportOpen(session)) return;
+      handler(session);
+    });
+  }, [isSessionTransportOpen]);
+
+  const closeSession = useCallback(() => {
+    const currentSessionPromise = sessionRef.current;
+    sessionRef.current = null;
+    isSocketOpenRef.current = false;
+    isSessionReadyRef.current = false;
+    if (currentSessionPromise) {
+      currentSessionPromise.then((session: any) => {
+        try { session.close(); } catch {}
+      });
+    }
+  }, []);
+
+  const flushPendingNotes = useCallback(() => {
+    if (pendingContextNotesRef.current.length === 0) return;
+    const notes = [...pendingContextNotesRef.current];
+    pendingContextNotesRef.current = [];
+    for (const note of notes) {
+      pushContextNote(note);
+    }
+  }, [pushContextNote]);
+
+  const handleServerMessage = useCallback((
+    message: LiveServerMessage,
+    sessionPromise: Promise<any>,
+    playbackContext: AudioContext | null,
+    sessionMode: 'rehearsal' | 'presentation',
+  ) => {
+    if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+
+    if (message.setupComplete) {
+      isSessionReadyRef.current = true;
+      console.log(`[DeliveryAgent] Session setup complete at ${new Date().toISOString()}`);
+      flushPendingNotes();
+    }
+
+    // Save resumption handle for transparent reconnect
+    const msgAny = message as any;
+    if (msgAny.sessionResumptionUpdate) {
+      const { newHandle, resumable } = msgAny.sessionResumptionUpdate;
+      if (resumable !== false && newHandle) {
+        resumptionHandleRef.current = newHandle;
+        console.debug(`[DeliveryAgent] Resumption handle saved`);
+      }
+    }
+
+    // Server signals imminent disconnect — attempt reconnect
+    if (msgAny.goAway) {
+      console.warn(`[DeliveryAgent] Received goAway from server`);
+      if (!isReconnectingRef.current) {
+        reconnectRef.current();
+      }
+    }
+
+    const serverContent = message.serverContent as any;
+    if (serverContent?.inputTranscription?.text) {
+      ingestInputTranscriptRef.current(serverContent.inputTranscription.text);
+    }
+
+    if (message.serverContent?.modelTurn && sessionMode === 'rehearsal' && playbackContext) {
+      for (const part of message.serverContent.modelTurn.parts) {
+        if (!part.inlineData?.data) continue;
+        const base64Audio = part.inlineData.data;
+        const binaryString = atob(base64Audio);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const pcm16 = new Int16Array(bytes.buffer);
+        const audioBuffer = playbackContext.createBuffer(1, pcm16.length, 24000);
+        const channelData = audioBuffer.getChannelData(0);
+        for (let i = 0; i < pcm16.length; i++) {
+          channelData[i] = pcm16[i] / 32768;
+        }
+        const sourceNode = playbackContext.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        if (playbackAnalyserRef.current) sourceNode.connect(playbackAnalyserRef.current);
+        else sourceNode.connect(playbackContext.destination);
+
+        const startTime = Math.max(playbackContext.currentTime, nextPlayTimeRef.current);
+        sourceNode.start(startTime);
+        nextPlayTimeRef.current = startTime + audioBuffer.duration;
+        sourceNodesRef.current.push(sourceNode);
+
+        if (speechStopTimeoutRef.current !== null) {
+          clearTimeout(speechStopTimeoutRef.current);
+          speechStopTimeoutRef.current = null;
+        }
+
+        const startDelayMs = Math.max(0, (startTime - playbackContext.currentTime) * 1000);
+        if (startDelayMs <= 20) {
+          setSpeakingState(true);
+        } else {
+          const timeoutId = window.setTimeout(() => {
+            speechStartTimeoutsRef.current = speechStartTimeoutsRef.current.filter((id) => id !== timeoutId);
+            if (!isSocketOpenRef.current) return;
+            setSpeakingState(true);
+          }, startDelayMs);
+          speechStartTimeoutsRef.current.push(timeoutId);
+        }
+
+        sourceNode.onended = () => {
+          sourceNodesRef.current = sourceNodesRef.current.filter((node) => node !== sourceNode);
+          if (sourceNodesRef.current.length === 0) {
+            if (speechStopTimeoutRef.current !== null) {
+              clearTimeout(speechStopTimeoutRef.current);
+            }
+            speechStopTimeoutRef.current = window.setTimeout(() => {
+              speechStopTimeoutRef.current = null;
+              if (!isSocketOpenRef.current) return;
+              setSpeakingState(false);
+            }, 90);
+          }
+        };
+      }
+    }
+
+    if (message.serverContent?.interrupted) {
+      clearSpeakingTimers();
+      sourceNodesRef.current.forEach((node) => {
+        try {
+          node.stop();
+        } catch {
+          // ignore
+        }
+      });
+      sourceNodesRef.current = [];
+      setSpeakingState(false);
+      if (playbackContext) {
+        nextPlayTimeRef.current = playbackContext.currentTime;
+      }
+    }
+
+    if (message.toolCall) {
+      for (const call of message.toolCall.functionCalls) {
+        if (call.name === 'updateIndicators' && onUpdateRef.current && call.args && typeof call.args === 'object') {
+          const args = call.args as Record<string, unknown>;
+          const update: DeliveryAgentUpdate = {
+            pace: typeof args.pace === 'string' ? args.pace : undefined,
+            eyeContact: typeof args.eyeContact === 'string' ? args.eyeContact : undefined,
+            posture: typeof args.posture === 'string' ? args.posture : undefined,
+            fillerWords: typeof args.fillerWords === 'object' && args.fillerWords
+              ? {
+                total: typeof (args.fillerWords as Record<string, unknown>).total === 'number'
+                  ? (args.fillerWords as Record<string, number>).total
+                  : undefined,
+                breakdown: typeof (args.fillerWords as Record<string, unknown>).breakdown === 'object'
+                  ? (args.fillerWords as Record<string, Record<string, number>>).breakdown
+                  : undefined,
+              }
+              : undefined,
+            feedbackMessage: typeof args.feedbackMessage === 'string' ? args.feedbackMessage : undefined,
+            confidenceScore: typeof args.confidenceScore === 'number' ? args.confidenceScore : undefined,
+            volumeLevel: typeof args.volumeLevel === 'string' ? args.volumeLevel : undefined,
+            overallScore: typeof args.overallScore === 'number' ? args.overallScore : undefined,
+            fallbackCurrentSlide: typeof args.currentSlide === 'number' ? args.currentSlide : undefined,
+            microPrompt: typeof args.microPrompt === 'string' ? args.microPrompt : undefined,
+            rescueText: typeof args.rescueText === 'string' ? args.rescueText : undefined,
+            agentMode: typeof args.agentMode === 'string' ? args.agentMode as DeliveryAgentUpdate['agentMode'] : undefined,
+            fallbackSlideTimeRemaining: typeof args.slideTimeRemaining === 'number' ? args.slideTimeRemaining : undefined,
+          };
+          if (localVisualActiveRef.current) {
+            delete update.eyeContact;
+            delete update.posture;
+          }
+          onUpdateRef.current(update);
+
+          // Auto-clear cue after cueDurationSec
+          const duration = typeof args.cueDurationSec === 'number' ? (args.cueDurationSec as number) : 0;
+          if (duration > 0 && (args.microPrompt || args.rescueText)) {
+            if (cueTimerRef.current) clearTimeout(cueTimerRef.current);
+            cueTimerRef.current = window.setTimeout(() => {
+              cueTimerRef.current = null;
+              onUpdateRef.current?.({ microPrompt: '', rescueText: '', agentMode: 'monitor' });
+            }, duration * 1000);
+          }
+        }
+
+        if (call.name === 'saveSlideAnalysis' && onSlideAnalysisRef.current && call.args && typeof call.args === 'object') {
+          const payload = call.args as unknown as SlideAnalysisToolPayload;
+          if (typeof payload.slideNumber === 'number' && Array.isArray(payload.issues) && typeof payload.riskLevel === 'string') {
+            onSlideAnalysisRef.current({
+              slideNumber: payload.slideNumber,
+              issues: payload.issues,
+              bestPhrase: payload.bestPhrase ?? '',
+              riskLevel: payload.riskLevel,
+            });
+          }
+        }
+
+        withOpenSession((session) => {
+          try {
+            session.sendToolResponse({
+              functionResponses: [{
+                id: call.id,
+                name: call.name,
+                response: { result: 'ok' },
+                scheduling: FunctionResponseScheduling.SILENT,
+              }],
+            });
+          } catch {
+            // ignore
+          }
+        });
+      }
+    }
+  }, [withOpenSession, setSpeakingState, clearSpeakingTimers, flushPendingNotes]);
+
   const disconnect = useCallback((options?: { skipSessionClose?: boolean }) => {
+    userInitiatedDisconnectRef.current = true;
+    if (reconnectTimeoutRef.current !== null) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    isReconnectingRef.current = false;
+    setIsReconnecting(false);
+    reconnectAttemptsRef.current = 0;
+    resumptionHandleRef.current = null;
+
     const shouldCloseSession = !options?.skipSessionClose;
     const currentSessionPromise = sessionRef.current;
     sessionRef.current = null;
@@ -423,6 +697,8 @@ export function useDeliveryLiveAPI({
       poseLandmarkerRef.current.close();
       poseLandmarkerRef.current = null;
     }
+    workletNodeRef.current = null;
+    videoElementRef.current = null;
     resetDerivedIndicatorsState();
     resetLocalVisualState();
     setIsConnected(false);
@@ -430,31 +706,140 @@ export function useDeliveryLiveAPI({
     setSpeakingState(false);
   }, [clearSpeakingTimers, resetDerivedIndicatorsState, resetLocalVisualState, setSpeakingState]);
 
-  const pushContextNote = useCallback((note: string) => {
-    const trimmed = note.trim();
-    if (!trimmed) return;
-    const currentSession = sessionRef.current;
-    if (!currentSession || !isSocketOpenRef.current || !isSessionReadyRef.current) {
-      pendingContextNotesRef.current.push(trimmed);
+  const doReconnect = useCallback(async () => {
+    if (isReconnectingRef.current) return;
+    if (!connectConfigRef.current) return;
+
+    isReconnectingRef.current = true;
+    setIsReconnecting(true);
+    console.log(`[DeliveryAgent] Reconnecting (attempt ${reconnectAttemptsRef.current + 1}, ${resumptionHandleRef.current ? 'resuming session' : 'fresh session'})...`);
+
+    closeSession();
+
+    const storedConfig = connectConfigRef.current;
+    const playbackContext = playbackContextRef.current;
+
+    // Presentation mode has no playbackContext — that's OK
+    if (storedConfig.mode === 'rehearsal' && !playbackContext) {
+      console.error('[DeliveryAgent] Cannot reconnect: playback context missing');
+      isReconnectingRef.current = false;
+      setIsReconnecting(false);
+      setError('Connection lost. Please reconnect.');
       return;
     }
 
-    currentSession.then((session) => {
-      if (sessionRef.current !== currentSession || !isSocketOpenRef.current || !isSessionReadyRef.current) return;
-      try {
-        session.sendClientContent({
-          turns: [{ role: 'user', parts: [{ text: trimmed }] }],
-          turnComplete: true,
-        });
-      } catch {
-        pendingContextNotesRef.current.push(trimmed);
+    const config = {
+      ...storedConfig.config,
+      sessionResumption: {
+        handle: resumptionHandleRef.current || undefined,
+      },
+    };
+
+    try {
+      const ai = await createBrowserLiveClient('delivery');
+      const sessionPromise = ai.live.connect({
+        model: storedConfig.model,
+        config,
+        callbacks: {
+          onopen: () => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.log(`[DeliveryAgent] Reconnected at ${new Date().toISOString()}`);
+            isSocketOpenRef.current = true;
+            isSessionReadyRef.current = false;
+            reconnectAttemptsRef.current = 0;
+            isReconnectingRef.current = false;
+            setIsReconnecting(false);
+            // Push current local visual state to maintain indicator continuity
+            onUpdateRef.current?.({
+              eyeContact: eyeStatusRef.current.current,
+              posture: postureStatusRef.current.current,
+            });
+            // Re-bind worklet to new session
+            const worklet = workletNodeRef.current;
+            if (worklet) {
+              worklet.port.onmessage = (event) => {
+                if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+                const pcm16 = new Int16Array(event.data);
+                const bytes = new Uint8Array(pcm16.buffer);
+                let binaryString = '';
+                for (let i = 0; i < bytes.length; i++) {
+                  binaryString += String.fromCharCode(bytes[i]);
+                }
+                const base64Data = btoa(binaryString);
+                withOpenSession((session) => {
+                  try {
+                    session.sendRealtimeInput({ media: { data: base64Data, mimeType: 'audio/pcm;rate=16000' } });
+                  } catch {
+                    // ignore
+                  }
+                });
+              };
+            }
+          },
+          onmessage: async (message: LiveServerMessage) => {
+            handleServerMessage(message, sessionPromise, playbackContext, storedConfig.mode);
+          },
+          onclose: (event: CloseEvent) => {
+            if (sessionRef.current !== sessionPromise) return;
+            if (userInitiatedDisconnectRef.current) return;
+            console.debug(`[DeliveryAgent] Reconnected session closed`, { code: event.code, reason: event.reason });
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[DeliveryAgent] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              setIsReconnecting(false);
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
+          },
+          onerror: (err: any) => {
+            if (sessionRef.current !== sessionPromise) return;
+            console.error('[DeliveryAgent] Reconnect error:', err);
+            isSocketOpenRef.current = false;
+            isSessionReadyRef.current = false;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              isReconnectingRef.current = false;
+              setIsReconnecting(false);
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
+          },
+        },
+      });
+      sessionRef.current = sessionPromise;
+    } catch (err: any) {
+      console.error('[DeliveryAgent] Reconnect failed:', err);
+      isReconnectingRef.current = false;
+      if (reconnectAttemptsRef.current < 3) {
+        reconnectAttemptsRef.current++;
+        const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+        reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+      } else {
+        setIsReconnecting(false);
+        setError('Connection lost. Please reconnect.');
+        disconnect({ skipSessionClose: true });
       }
-    });
-  }, []);
+    }
+  }, [closeSession, disconnect, handleServerMessage, withOpenSession]);
+
+  reconnectRef.current = doReconnect;
 
   const connect = useCallback(async (videoElement: HTMLVideoElement): Promise<boolean> => {
     setIsConnecting(true);
     setError(null);
+    userInitiatedDisconnectRef.current = false;
+    reconnectAttemptsRef.current = 0;
     clearSpeakingTimers();
     setSpeakingState(false);
     resetDerivedIndicatorsState();
@@ -520,6 +905,8 @@ export function useDeliveryLiveAPI({
       }
       const workletNode = new AudioWorkletNode(audioContext, 'pcm-processor');
       source.connect(workletNode);
+      workletNodeRef.current = workletNode;
+      videoElementRef.current = videoElement;
 
       let playbackContext: AudioContext | null = null;
       if (mode === 'rehearsal') {
@@ -542,32 +929,7 @@ export function useDeliveryLiveAPI({
         ? `${getDeliveryBaseInstruction(mode)}\n\nUse the following project and strategy context while coaching:\n${trimmedContext}`
         : getDeliveryBaseInstruction(mode);
 
-      const isSessionTransportOpen = (session: any) => {
-        const readyState = session?.conn?.ws?.readyState;
-        if (typeof readyState === 'number') {
-          return readyState === 1;
-        }
-        return isSocketOpenRef.current;
-      };
-
       let sessionPromise: Promise<any>;
-      const withOpenSession = (handler: (session: any) => void) => {
-        sessionPromise.then((session) => {
-          if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-          if (!isSessionReadyRef.current) return;
-          if (!isSessionTransportOpen(session)) return;
-          handler(session);
-        });
-      };
-
-      const flushPendingNotes = () => {
-        if (pendingContextNotesRef.current.length === 0) return;
-        const notes = [...pendingContextNotesRef.current];
-        pendingContextNotesRef.current = [];
-        for (const note of notes) {
-          pushContextNote(note);
-        }
-      };
 
       const ingestInputTranscript = (rawText: string) => {
         const trimmed = rawText.trim();
@@ -618,9 +980,10 @@ export function useDeliveryLiveAPI({
           breakdown[label] = (breakdown[label] ?? 0) + matches.length;
         }
       };
+      ingestInputTranscriptRef.current = ingestInputTranscript;
 
       const startLocalVisualAnalysis = async () => {
-        if (!onUpdate) return;
+        if (!onUpdateRef.current) return;
         if (stream.getVideoTracks().length === 0) return;
         if (localVisualIntervalRef.current) {
           clearInterval(localVisualIntervalRef.current);
@@ -675,7 +1038,7 @@ export function useDeliveryLiveAPI({
           const analysisCtx = analysisCanvas.getContext('2d');
 
           localVisualIntervalRef.current = window.setInterval(() => {
-            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+            if (!isSocketOpenRef.current) return;
             if (videoElement.readyState < 2 || !analysisCtx) return;
 
             const frameWidth = videoElement.videoWidth || 0;
@@ -732,7 +1095,7 @@ export function useDeliveryLiveAPI({
               const calibratingSignature = 'Calibrating...|Calibrating...';
               if (calibratingSignature !== lastLocalVisualSignatureRef.current) {
                 lastLocalVisualSignatureRef.current = calibratingSignature;
-                onUpdate({ eyeContact: 'Calibrating...', posture: 'Calibrating...' });
+                onUpdateRef.current?.({ eyeContact: 'Calibrating...', posture: 'Calibrating...' });
               }
               return;
             }
@@ -768,7 +1131,7 @@ export function useDeliveryLiveAPI({
             const signature = `${update.eyeContact ?? ''}|${update.posture ?? ''}`;
             if (signature === lastLocalVisualSignatureRef.current) return;
             lastLocalVisualSignatureRef.current = signature;
-            onUpdate(update);
+            onUpdateRef.current?.(update);
           }, LOCAL_VISUAL_TICK_MS);
         } catch (err) {
           console.warn('[DeliveryAgent] Local visual analysis unavailable', err);
@@ -783,6 +1146,12 @@ export function useDeliveryLiveAPI({
           responseModalities: [Modality.AUDIO],
           inputAudioTranscription: {},
           ...(mode === 'rehearsal' ? { outputAudioTranscription: {} } : {}),
+          sessionResumption: {
+            handle: resumptionHandleRef.current || undefined,
+          },
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
           realtimeInputConfig: {
             activityHandling: mode === 'presentation'
               ? ActivityHandling.NO_INTERRUPTION
@@ -856,15 +1225,13 @@ export function useDeliveryLiveAPI({
             isSessionReadyRef.current = false;
             setIsConnected(true);
             setIsConnecting(false);
-            if (onUpdate) {
-              onUpdate({
-                eyeContact: eyeStatusRef.current.current,
-                posture: postureStatusRef.current.current,
-              });
-            }
+            onUpdateRef.current?.({
+              eyeContact: eyeStatusRef.current.current,
+              posture: postureStatusRef.current.current,
+            });
 
             workletNode.port.onmessage = (event) => {
-              if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+              if (!isSocketOpenRef.current) return;
               const pcm16 = new Int16Array(event.data);
               const bytes = new Uint8Array(pcm16.buffer);
               let binaryString = '';
@@ -901,9 +1268,9 @@ export function useDeliveryLiveAPI({
               }, 1000);
             }
 
-            if (onUpdate) {
+            if (onUpdateRef.current) {
               indicatorIntervalRef.current = window.setInterval(() => {
-                if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
+                if (!isSocketOpenRef.current) return;
 
                 const now = Date.now();
                 const cutoff = now - TRANSCRIPT_PACE_WINDOW_MS;
@@ -973,195 +1340,136 @@ export function useDeliveryLiveAPI({
                 const signature = `${update.pace ?? ''}|${update.paceWpm ?? ''}|${update.volumeLevel ?? ''}|${fillerTotal}|${JSON.stringify(fillerBreakdown)}`;
                 if (signature === lastDerivedSignatureRef.current) return;
                 lastDerivedSignatureRef.current = signature;
-                onUpdate(update);
+                onUpdateRef.current?.(update);
               }, DERIVED_INDICATOR_TICK_MS);
             }
 
             void startLocalVisualAnalysis();
           },
           onmessage: async (message: LiveServerMessage) => {
-            if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-
-            if (message.setupComplete) {
-              isSessionReadyRef.current = true;
-              flushPendingNotes();
-            }
-
-            const serverContent = message.serverContent as any;
-            if (serverContent?.inputTranscription?.text) {
-              ingestInputTranscript(serverContent.inputTranscription.text);
-            }
-
-            if (message.serverContent?.modelTurn && mode === 'rehearsal' && playbackContext) {
-              for (const part of message.serverContent.modelTurn.parts) {
-                if (!part.inlineData?.data) continue;
-                const base64Audio = part.inlineData.data;
-                const binaryString = atob(base64Audio);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i);
-                }
-                const pcm16 = new Int16Array(bytes.buffer);
-                const audioBuffer = playbackContext.createBuffer(1, pcm16.length, 24000);
-                const channelData = audioBuffer.getChannelData(0);
-                for (let i = 0; i < pcm16.length; i++) {
-                  channelData[i] = pcm16[i] / 32768;
-                }
-                const sourceNode = playbackContext.createBufferSource();
-                sourceNode.buffer = audioBuffer;
-                if (playbackAnalyserRef.current) sourceNode.connect(playbackAnalyserRef.current);
-                else sourceNode.connect(playbackContext.destination);
-
-                const startTime = Math.max(playbackContext.currentTime, nextPlayTimeRef.current);
-                sourceNode.start(startTime);
-                nextPlayTimeRef.current = startTime + audioBuffer.duration;
-                sourceNodesRef.current.push(sourceNode);
-
-                if (speechStopTimeoutRef.current !== null) {
-                  clearTimeout(speechStopTimeoutRef.current);
-                  speechStopTimeoutRef.current = null;
-                }
-
-                const startDelayMs = Math.max(0, (startTime - playbackContext.currentTime) * 1000);
-                if (startDelayMs <= 20) {
-                  setSpeakingState(true);
-                } else {
-                  const timeoutId = window.setTimeout(() => {
-                    speechStartTimeoutsRef.current = speechStartTimeoutsRef.current.filter((id) => id !== timeoutId);
-                    if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-                    setSpeakingState(true);
-                  }, startDelayMs);
-                  speechStartTimeoutsRef.current.push(timeoutId);
-                }
-
-                sourceNode.onended = () => {
-                  sourceNodesRef.current = sourceNodesRef.current.filter((node) => node !== sourceNode);
-                  if (sourceNodesRef.current.length === 0) {
-                    if (speechStopTimeoutRef.current !== null) {
-                      clearTimeout(speechStopTimeoutRef.current);
-                    }
-                    speechStopTimeoutRef.current = window.setTimeout(() => {
-                      speechStopTimeoutRef.current = null;
-                      if (sessionRef.current !== sessionPromise || !isSocketOpenRef.current) return;
-                      setSpeakingState(false);
-                    }, 90);
-                  }
-                };
-              }
-            }
-
-            if (message.serverContent?.interrupted) {
-              clearSpeakingTimers();
-              sourceNodesRef.current.forEach((node) => {
-                try {
-                  node.stop();
-                } catch {
-                  // ignore
-                }
-              });
-              sourceNodesRef.current = [];
-              setSpeakingState(false);
-              if (playbackContext) {
-                nextPlayTimeRef.current = playbackContext.currentTime;
-              }
-            }
-
-            if (message.toolCall) {
-              for (const call of message.toolCall.functionCalls) {
-                if (call.name === 'updateIndicators' && onUpdate && call.args && typeof call.args === 'object') {
-                  const args = call.args as Record<string, unknown>;
-                  const update: DeliveryAgentUpdate = {
-                    pace: typeof args.pace === 'string' ? args.pace : undefined,
-                    eyeContact: typeof args.eyeContact === 'string' ? args.eyeContact : undefined,
-                    posture: typeof args.posture === 'string' ? args.posture : undefined,
-                    fillerWords: typeof args.fillerWords === 'object' && args.fillerWords
-                      ? {
-                        total: typeof (args.fillerWords as Record<string, unknown>).total === 'number'
-                          ? (args.fillerWords as Record<string, number>).total
-                          : undefined,
-                        breakdown: typeof (args.fillerWords as Record<string, unknown>).breakdown === 'object'
-                          ? (args.fillerWords as Record<string, Record<string, number>>).breakdown
-                          : undefined,
-                      }
-                      : undefined,
-                    feedbackMessage: typeof args.feedbackMessage === 'string' ? args.feedbackMessage : undefined,
-                    confidenceScore: typeof args.confidenceScore === 'number' ? args.confidenceScore : undefined,
-                    volumeLevel: typeof args.volumeLevel === 'string' ? args.volumeLevel : undefined,
-                    overallScore: typeof args.overallScore === 'number' ? args.overallScore : undefined,
-                    fallbackCurrentSlide: typeof args.currentSlide === 'number' ? args.currentSlide : undefined,
-                    microPrompt: typeof args.microPrompt === 'string' ? args.microPrompt : undefined,
-                    rescueText: typeof args.rescueText === 'string' ? args.rescueText : undefined,
-                    agentMode: typeof args.agentMode === 'string' ? args.agentMode as DeliveryAgentUpdate['agentMode'] : undefined,
-                    fallbackSlideTimeRemaining: typeof args.slideTimeRemaining === 'number' ? args.slideTimeRemaining : undefined,
-                  };
-                  if (localVisualActiveRef.current) {
-                    delete update.eyeContact;
-                    delete update.posture;
-                  }
-                  onUpdate(update);
-
-                  // Auto-clear cue after cueDurationSec
-                  const duration = typeof args.cueDurationSec === 'number' ? (args.cueDurationSec as number) : 0;
-                  if (duration > 0 && (args.microPrompt || args.rescueText)) {
-                    if (cueTimerRef.current) clearTimeout(cueTimerRef.current);
-                    cueTimerRef.current = window.setTimeout(() => {
-                      cueTimerRef.current = null;
-                      onUpdate({ microPrompt: '', rescueText: '', agentMode: 'monitor' });
-                    }, duration * 1000);
-                  }
-                }
-
-                if (call.name === 'saveSlideAnalysis' && onSlideAnalysis && call.args && typeof call.args === 'object') {
-                  const payload = call.args as unknown as SlideAnalysisToolPayload;
-                  if (typeof payload.slideNumber === 'number' && Array.isArray(payload.issues) && typeof payload.riskLevel === 'string') {
-                    onSlideAnalysis({
-                      slideNumber: payload.slideNumber,
-                      issues: payload.issues,
-                      bestPhrase: payload.bestPhrase ?? '',
-                      riskLevel: payload.riskLevel,
-                    });
-                  }
-                }
-
-                withOpenSession((session) => {
-                  try {
-                    session.sendToolResponse({
-                      functionResponses: [{
-                        id: call.id,
-                        name: call.name,
-                        response: { result: 'ok' },
-                        scheduling: FunctionResponseScheduling.SILENT,
-                      }],
-                    });
-                  } catch {
-                    // ignore
-                  }
-                });
-              }
-            }
+            handleServerMessage(message, sessionPromise, playbackContext, mode);
           },
           onclose: (event: CloseEvent) => {
             if (sessionRef.current !== sessionPromise) return;
-            if (!isSessionReadyRef.current && event.code !== 1000) {
-              const reason = event.reason?.trim();
-              setError(reason ? `Session closed before setup: ${reason}` : `Session closed before setup (code ${event.code})`);
-            }
+            const wasReady = isSessionReadyRef.current;
+            console.debug(`[DeliveryAgent] Session closed`, { code: event.code, reason: event.reason, wasReady });
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (userInitiatedDisconnectRef.current) return;
+            if (!wasReady && event.code !== 1000) {
+              const reason = event.reason?.trim();
+              setError(reason ? `Session closed before setup: ${reason}` : `Session closed before setup (code ${event.code})`);
+              disconnect({ skipSessionClose: true });
+              return;
+            }
+            if (isReconnectingRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              console.log(`[DeliveryAgent] Will reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              setError('Connection lost. Please reconnect.');
+              disconnect({ skipSessionClose: true });
+            }
           },
           onerror: (err: any) => {
             if (sessionRef.current !== sessionPromise) return;
             console.error('Delivery Live API Error:', err);
-            setError(err.message || 'An error occurred');
             isSocketOpenRef.current = false;
             isSessionReadyRef.current = false;
-            disconnect({ skipSessionClose: true });
+            if (userInitiatedDisconnectRef.current) return;
+            if (reconnectAttemptsRef.current < 3) {
+              reconnectAttemptsRef.current++;
+              isReconnectingRef.current = false;
+              const delay = 500 * Math.pow(2, reconnectAttemptsRef.current - 1);
+              reconnectTimeoutRef.current = window.setTimeout(() => reconnectRef.current(), delay);
+            } else {
+              setError(err.message || 'An error occurred');
+              disconnect({ skipSessionClose: true });
+            }
           },
         },
       });
 
       sessionRef.current = sessionPromise;
+      connectConfigRef.current = {
+        model: 'gemini-2.5-flash-native-audio-latest',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          ...(mode === 'rehearsal' ? { outputAudioTranscription: {} } : {}),
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
+          realtimeInputConfig: {
+            activityHandling: mode === 'presentation'
+              ? ActivityHandling.NO_INTERRUPTION
+              : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            automaticActivityDetection: {
+              disabled: false,
+              silenceDurationMs: mode === 'presentation' ? 500 : 200,
+              prefixPaddingMs: 20,
+            },
+          },
+          proactivity: { proactiveAudio: mode === 'rehearsal' },
+          enableAffectiveDialog: true,
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
+          systemInstruction,
+          tools: [{
+            functionDeclarations: [{
+              name: 'updateIndicators',
+              description: 'Update the delivery indicators on the user screen based on speech, confidence, and speaking performance.',
+              behavior: Behavior.NON_BLOCKING,
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  pace: { type: Type.STRING, description: 'Current speaking pace.' },
+                  eyeContact: { type: Type.STRING, description: 'Eye contact status.' },
+                  posture: { type: Type.STRING, description: 'Posture status.' },
+                  fillerWords: {
+                    type: Type.OBJECT,
+                    properties: {
+                      total: { type: Type.INTEGER },
+                      breakdown: { type: Type.OBJECT },
+                    },
+                  },
+                  feedbackMessage: { type: Type.STRING, description: 'A short delivery feedback message.' },
+                  confidenceScore: { type: Type.INTEGER, description: '1-100 confidence scale.' },
+                  volumeLevel: { type: Type.STRING, description: 'Volume level.' },
+                  overallScore: { type: Type.INTEGER, description: '1-100 overall performance score.' },
+                  currentSlide: { type: Type.INTEGER, description: 'Fallback slide estimate when no screen agent is active.' },
+                  microPrompt: { type: Type.STRING, description: 'Concise cue shown as subtitle overlay on the speaker screen. 1-5 words. Set to "" to clear.' },
+                  rescueText: { type: Type.STRING, description: 'Rescue text shown as subtitle overlay detail when speaker is stuck. Set to "" to clear.' },
+                  agentMode: {
+                    type: Type.STRING,
+                    description: 'Subtitle overlay only appears when agentMode is not "monitor".',
+                    enum: ['monitor', 'soft_cue', 'directive', 'rescue'],
+                  },
+                  slideTimeRemaining: { type: Type.INTEGER, description: 'Fallback slide time estimate when no screen agent is active.' },
+                  cueDurationSec: { type: Type.INTEGER, description: 'How long (in seconds) the microPrompt/rescueText should remain visible before auto-clearing.' },
+                },
+              },
+            }, {
+              name: 'saveSlideAnalysis',
+              description: 'Persist a slide-level coaching insight discovered during the live session.',
+              behavior: Behavior.NON_BLOCKING,
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  slideNumber: { type: Type.INTEGER },
+                  issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  bestPhrase: { type: Type.STRING },
+                  riskLevel: { type: Type.STRING, enum: ['safe', 'watch', 'fragile'] },
+                },
+                required: ['slideNumber', 'issues', 'riskLevel'],
+              },
+            }],
+          }],
+        },
+        mode,
+      };
       return true;
     } catch (err: any) {
       console.error(err);
@@ -1173,20 +1481,20 @@ export function useDeliveryLiveAPI({
     clearSpeakingTimers,
     contextText,
     disconnect,
+    handleServerMessage,
     mode,
     onMediaStream,
-    onSlideAnalysis,
     onTranscriptSegment,
-    onUpdate,
-    pushContextNote,
     resetDerivedIndicatorsState,
     resetLocalVisualState,
     setSpeakingState,
+    withOpenSession,
   ]);
 
   return {
     isConnected,
     isConnecting,
+    isReconnecting,
     error,
     connect,
     disconnect,

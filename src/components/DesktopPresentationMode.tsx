@@ -82,6 +82,7 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
   const {
     isConnected,
     isConnecting,
+    isReconnecting,
     error,
     connect,
     disconnect,
@@ -300,9 +301,9 @@ export function DesktopPresentationMode({ project, gamePlan, onBack, onSessionEn
           <span className="text-xs uppercase tracking-wider text-zinc-600">Presentation</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
+          <div className={`w-1.5 h-1.5 rounded-full ${isReconnecting ? 'bg-amber-400 animate-pulse' : isConnected ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : isConnecting ? 'bg-amber-400 animate-pulse' : 'bg-zinc-700'}`} />
           <span className="text-xs text-zinc-500">
-            {isConnecting ? 'Connecting' : isConnected ? 'Live' : 'Ready'}
+            {isReconnecting ? 'Reconnecting...' : isConnecting ? 'Connecting' : isConnected ? 'Live' : 'Ready'}
           </span>
         </div>
       </header>
