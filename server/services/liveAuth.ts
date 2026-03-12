@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Modality } from '@google/genai';
 import type { LiveAuthTokenResponse, LiveSessionKind } from '../../shared/types.js';
 
 const LIVE_MODELS: Record<LiveSessionKind, string> = {
@@ -42,6 +42,9 @@ export async function createLiveAuthToken(kind: LiveSessionKind): Promise<LiveAu
       newSessionExpireTime: newSessionExpiresAt,
       liveConnectConstraints: {
         model,
+        config: {
+          responseModalities: [Modality.AUDIO],
+        },
       },
     },
   });

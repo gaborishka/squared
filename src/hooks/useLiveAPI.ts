@@ -652,7 +652,6 @@ export function useLiveAPI({
       ...storedConfig.config,
       sessionResumption: {
         handle: resumptionHandleRef.current || undefined,
-        transparent: false,
       },
     };
 
@@ -1135,7 +1134,6 @@ export function useLiveAPI({
           outputAudioTranscription: {},
           sessionResumption: {
             handle: resumptionHandleRef.current || undefined,
-            transparent: false,
           },
           contextWindowCompression: {
             slidingWindow: {},
@@ -1369,7 +1367,6 @@ export function useLiveAPI({
           systemInstruction,
           sessionResumption: {
             handle: resumptionHandleRef.current || undefined,
-            transparent: false,
           },
           contextWindowCompression: {
             slidingWindow: {},
