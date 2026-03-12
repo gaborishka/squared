@@ -2,6 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initializeDatabase } from './db/database.js';
 import { analysesRouter } from './routes/analyses.js';
 import { projectsRouter } from './routes/projects.js';
 import { runsRouter } from './routes/runs.js';
@@ -45,9 +46,16 @@ const currentFilePath = fileURLToPath(import.meta.url);
 
 if (process.argv[1] === currentFilePath) {
   const port = Number(process.env.SERVER_PORT || process.env.PORT || 3001);
-  app.listen(port, () => {
-    console.log(`Squared API server listening on http://localhost:${port}`);
-  });
+  void initializeDatabase()
+    .then(() => {
+      app.listen(port, () => {
+        console.log(`Squared API server listening on http://localhost:${port}`);
+      });
+    })
+    .catch((error) => {
+      console.error('Failed to initialize PostgreSQL for Squared:', error);
+      process.exit(1);
+    });
 }
 
 export { app };

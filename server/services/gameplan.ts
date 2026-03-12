@@ -74,16 +74,16 @@ function ensureSlides(project: ProjectDetails): ProjectDetails['slides'] {
   ];
 }
 
-export function generateGamePlan(projectId: string): GamePlan | null {
-  const project = getProject(projectId);
+export async function generateGamePlan(projectId: string): Promise<GamePlan | null> {
+  const project = await getProject(projectId);
   if (!project) return null;
 
   const slides = ensureSlides(project);
-  const rehearsalRuns = listRuns(projectId).filter((run) => run.mode === 'rehearsal');
+  const rehearsalRuns = (await listRuns(projectId)).filter((run) => run.mode === 'rehearsal');
   const scores = rehearsalRuns
     .map((run) => run.overallScore)
     .filter((score): score is number => typeof score === 'number');
-  const segments = refreshRiskSegments(projectId);
+  const segments = await refreshRiskSegments(projectId);
 
   const slideSegments = slides.map((slide) => {
     const relatedSegments = segments.filter((segment) => segment.slideNumber === slide.slideNumber);

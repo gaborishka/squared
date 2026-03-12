@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, ArrowLeft, Mic, Phone, Presentation, Sparkles, Video } from 'lucide-react';
+import { AlertCircle, ArrowLeft, History, Mic, Phone, Presentation, Sparkles, Video } from 'lucide-react';
 import { api } from '../api/client';
 import { useDesktopDualLiveSession } from '../hooks/useDesktopDualLiveSession';
 import {
@@ -10,12 +10,22 @@ import {
   formatTimestampFromStart,
   ingestIndicatorSample,
   mergeSlideAnalysis,
+  resolveLiveMemoryCue,
   summarizeSessionMetrics,
 } from '../lib/session';
+import { buildTranscriptSegmentDraft, pickSupportedRecordingMimeType } from '../lib/runCapture';
 import { DualAgentOverlay } from './DualAgentOverlay';
 import { SessionInsights } from './SessionInsights';
 import { AnalyzingPulse } from './AnalyzingPulse';
-import { ProjectAnalysis, ProjectDetails, dualAgentToPillState, dualAgentToSubtitleState } from '../types';
+import {
+  LiveMemoryCue,
+  ProjectAnalysis,
+  ProjectDetails,
+  RunArtifact,
+  RunTranscriptSegment,
+  dualAgentToPillState,
+  dualAgentToSubtitleState,
+} from '../types';
 import type { FeedbackItem } from './FeedbackTimeline';
 
 interface DesktopRehearsalModeProps {
@@ -54,14 +64,61 @@ export function DesktopRehearsalMode({
   const handleToggleConnectRef = useRef<() => void>(() => {});
   const disconnectRef = useRef<() => void>(() => {});
   const mainWindowHiddenRef = useRef(false);
+  const transcriptSegmentsRef = useRef<Array<Omit<RunTranscriptSegment, 'runId'>>>([]);
+  const transcriptSequenceRef = useRef(0);
+  const currentSlideRef = useRef<number | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingMimeTypeRef = useRef('video/webm');
+  const activeRecordingStreamRef = useRef<MediaStream | null>(null);
 
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackItem[]>([]);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState('0:00');
   const [mainWindowHidden, setMainWindowHidden] = useState(false);
+  const [memoryBySlide, setMemoryBySlide] = useState<Record<number, LiveMemoryCue[]> | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(true);
   const riskCount = analysisLoading ? '-' : (analysis?.riskSegments.length ?? 0);
   const runCount = analysisLoading ? '-' : (analysis?.rehearsalRuns ?? 0);
   const hasRisks = !analysisLoading && (analysis?.riskSegments.length ?? 0) > 0;
+
+  const releaseRecordingCapture = useCallback(() => {
+    mediaRecorderRef.current = null;
+    activeRecordingStreamRef.current = null;
+  }, []);
+
+  const stopRecordingCapture = useCallback((options?: { preserveRecorder?: boolean }) => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+    if (!options?.preserveRecorder) {
+      releaseRecordingCapture();
+    } else {
+      activeRecordingStreamRef.current = null;
+    }
+  }, [releaseRecordingCapture]);
+
+  const startRecordingCapture = useCallback((stream: MediaStream | null) => {
+    if (!stream || activeRecordingStreamRef.current === stream || typeof MediaRecorder === 'undefined') return;
+    stopRecordingCapture();
+    recordingChunksRef.current = [];
+    activeRecordingStreamRef.current = stream;
+    const mimeType = pickSupportedRecordingMimeType(stream);
+    recordingMimeTypeRef.current = mimeType;
+
+    try {
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.start(1000);
+      mediaRecorderRef.current = recorder;
+    } catch (error) {
+      console.warn('Failed to start desktop run recording capture', error);
+      releaseRecordingCapture();
+    }
+  }, [releaseRecordingCapture, stopRecordingCapture]);
 
   const {
     isConnected,
@@ -79,10 +136,46 @@ export function DesktopRehearsalMode({
     project,
     analysis,
     gamePlan: analysis?.latestGamePlan ?? null,
+    memoryBySlide,
     onSlideAnalysis: (payload) => {
       slideAnalysisMapRef.current = mergeSlideAnalysis(slideAnalysisMapRef.current, payload);
     },
+    onTranscriptSegment: ({ text, capturedAt }) => {
+      const segment = buildTranscriptSegmentDraft({
+        text,
+        capturedAt,
+        sessionStartTime: sessionStartTimeRef.current,
+        slideNumber: currentSlideRef.current,
+        sequence: transcriptSequenceRef.current,
+      });
+      transcriptSequenceRef.current += 1;
+      transcriptSegmentsRef.current.push(segment);
+    },
+    onMediaStream: (stream) => {
+      if (stream) startRecordingCapture(stream);
+      else stopRecordingCapture({ preserveRecorder: true });
+    },
   });
+  const activeMemoryCue = resolveLiveMemoryCue(memoryBySlide, legacyIndicators.currentSlide);
+
+  useEffect(() => {
+    let isActive = true;
+    setMemoryLoading(true);
+    api.getProjectMemory(project.id)
+      .then((memory) => {
+        if (isActive) setMemoryBySlide(memory);
+      })
+      .catch((error) => {
+        console.warn('Failed to load rehearsal memory', error);
+        if (isActive) setMemoryBySlide(null);
+      })
+      .finally(() => {
+        if (isActive) setMemoryLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [project.id]);
 
   const stopPreview = useCallback(() => {
     const previewStream = previewStreamRef.current;
@@ -120,7 +213,10 @@ export function DesktopRehearsalMode({
     disconnectRef.current = disconnect;
   }, [disconnect]);
 
-  useEffect(() => () => stopPreview(), [stopPreview]);
+  useEffect(() => () => {
+    stopPreview();
+    stopRecordingCapture();
+  }, [stopPreview, stopRecordingCapture]);
 
   useEffect(() => {
     if (isConnected || isConnecting) {
@@ -138,6 +234,9 @@ export function DesktopRehearsalMode({
       metricsTrackerRef.current = createSessionMetricsTracker();
       feedbackPayloadRef.current = [];
       slideAnalysisMapRef.current = new Map();
+      transcriptSegmentsRef.current = [];
+      transcriptSequenceRef.current = 0;
+      currentSlideRef.current = null;
       lastFeedbackMessageRef.current = '';
       lastMetricsSignatureRef.current = '';
       setFeedbackHistory([]);
@@ -150,6 +249,7 @@ export function DesktopRehearsalMode({
   }, [isConnected, isConnecting]);
 
   useEffect(() => {
+    currentSlideRef.current = legacyIndicators.currentSlide;
     const metricsSignature = [
       legacyIndicators.paceWpm ?? '',
       legacyIndicators.confidenceScore,
@@ -225,9 +325,57 @@ export function DesktopRehearsalMode({
     return unsubscribe;
   }, []);
 
+  const uploadRecordingArtifact = useCallback(async (runId: string): Promise<Omit<RunArtifact, 'createdAt' | 'runId'> | null> => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) return null;
+
+    const artifact = await new Promise<Omit<RunArtifact, 'createdAt' | 'runId'> | null>((resolve) => {
+      const finalize = async () => {
+        const blob = new Blob(recordingChunksRef.current, { type: recordingMimeTypeRef.current || 'video/webm' });
+        recordingChunksRef.current = [];
+        if (blob.size === 0) {
+          resolve(null);
+          return;
+        }
+
+        try {
+          const uploaded = await api.uploadRunArtifact(runId, blob, {
+            kind: 'full_recording',
+            startMs: 0,
+            endMs: sessionStartTimeRef.current ? Date.now() - sessionStartTimeRef.current : null,
+            fileName: blob.type.startsWith('audio/') ? `${runId}.audio.webm` : `${runId}.video.webm`,
+          });
+          resolve({
+            id: uploaded.id,
+            kind: uploaded.kind,
+            mimeType: uploaded.mimeType,
+            filePath: uploaded.filePath,
+            startMs: uploaded.startMs,
+            endMs: uploaded.endMs,
+          });
+        } catch (error) {
+          console.error('Failed to upload desktop rehearsal recording artifact:', error);
+          resolve(null);
+        }
+      };
+
+      recorder.addEventListener('stop', () => {
+        void finalize();
+      }, { once: true });
+
+      if (recorder.state === 'inactive') {
+        void finalize();
+      } else {
+        recorder.stop();
+      }
+    });
+
+    releaseRecordingCapture();
+    return artifact;
+  }, [releaseRecordingCapture]);
+
   const handleToggleConnect = async () => {
     if (isConnected || isConnecting) {
-      disconnect();
       window.squaredElectron?.clearOverlay?.();
       if (mainWindowHiddenRef.current) {
         window.squaredElectron?.showMainWindow?.();
@@ -236,10 +384,12 @@ export function DesktopRehearsalMode({
       }
       if (sessionStartTimeRef.current) {
         const duration = Date.now() - sessionStartTimeRef.current;
+        const runId = crypto.randomUUID();
         try {
+          const artifact = await uploadRecordingArtifact(runId);
           await api.saveRun({
             run: {
-              id: crypto.randomUUID(),
+              id: runId,
               projectId: project.id,
               mode: 'rehearsal',
               duration,
@@ -247,12 +397,18 @@ export function DesktopRehearsalMode({
             },
             feedbacks: feedbackPayloadRef.current,
             slideAnalyses: Array.from(slideAnalysisMapRef.current.values()),
+            artifacts: artifact ? [artifact] : [],
+            transcriptSegments: transcriptSegmentsRef.current,
           });
+          void api.getProjectMemory(project.id)
+            .then((memory) => setMemoryBySlide(memory))
+            .catch((error) => console.warn('Failed to refresh rehearsal memory', error));
         } catch (saveError) {
           console.error('Failed to save rehearsal session:', saveError);
         }
         onSessionEnd();
       }
+      disconnect();
       return;
     }
 
@@ -361,6 +517,30 @@ export function DesktopRehearsalMode({
               </div>
             </div>
           )}
+
+          <div className="px-4 py-3 border-b border-zinc-800/40">
+            <div className="flex items-center gap-2 mb-2">
+              <History className="w-3.5 h-3.5 text-emerald-400" />
+              <p className="text-[10px] uppercase tracking-wider text-zinc-600">Memory</p>
+            </div>
+            {activeMemoryCue ? (
+              <div className="rounded-xl bg-zinc-950/50 border border-zinc-800/60 px-3 py-2.5">
+                <p className="text-[11px] text-emerald-300 font-medium">
+                  {activeMemoryCue.slideNumber != null ? `Slide ${activeMemoryCue.slideNumber}` : 'General memory'}
+                </p>
+                <p className="mt-1 text-xs text-zinc-200 leading-relaxed">{activeMemoryCue.cueText}</p>
+                <p className="mt-2 text-[11px] text-zinc-500 line-clamp-2">{activeMemoryCue.supportingText}</p>
+              </div>
+            ) : memoryLoading ? (
+              <p className="text-xs text-zinc-500">Loading rehearsal memory…</p>
+            ) : (
+              <p className="text-xs text-zinc-500">
+                {legacyIndicators.currentSlide != null
+                  ? 'No historical cue for this slide yet.'
+                  : 'Memory cues will appear when you reach a slide with prior history.'}
+              </p>
+            )}
+          </div>
 
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
             <div className="px-4 py-3 flex items-center gap-2 border-b border-zinc-800/40">

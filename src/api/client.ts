@@ -1,10 +1,12 @@
 import type {
   GamePlan,
+  LiveMemoryCue,
   ProjectAnalysis,
   ProjectDetails,
   ProjectInput,
   ProjectSummary,
   RiskSegment,
+  RunArtifact,
   RunDetails,
   RunSummary,
   SaveRunPayload,
@@ -67,10 +69,30 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  uploadRunArtifact: async (
+    runId: string,
+    file: Blob,
+    meta: { kind: RunArtifact['kind']; startMs?: number | null; endMs?: number | null; fileName?: string },
+  ) => {
+    const formData = new FormData();
+    formData.append('runId', runId);
+    formData.append('kind', meta.kind);
+    if (typeof meta.startMs === 'number') formData.append('startMs', String(meta.startMs));
+    if (typeof meta.endMs === 'number') formData.append('endMs', String(meta.endMs));
+    formData.append('file', file, meta.fileName ?? 'recording.webm');
+    return requestJson<RunArtifact>('/api/runs/artifacts', {
+      method: 'POST',
+      body: formData,
+    });
+  },
   getProjectAnalysis: (projectId: string) =>
     requestJson<ProjectAnalysis>(`/api/projects/${projectId}/analysis`),
   getProjectRisks: (projectId: string) =>
     requestJson<RiskSegment[]>(`/api/projects/${projectId}/risks`),
+  getProjectMemory: (projectId: string) =>
+    requestJson<Record<number, LiveMemoryCue[]>>(`/api/projects/${projectId}/memory`),
+  getProjectSlideMemory: (projectId: string, slideNumber: number) =>
+    requestJson<LiveMemoryCue[]>(`/api/projects/${projectId}/memory?slide_number=${encodeURIComponent(slideNumber)}`),
   generateGamePlan: (projectId: string) =>
     requestJson<GamePlan>(`/api/projects/${projectId}/gameplan`, {
       method: 'POST',

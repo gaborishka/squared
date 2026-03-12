@@ -1,20 +1,24 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Database, Clock, Calendar, Activity, MessageSquare } from 'lucide-react';
-import { RunData, FeedbackData } from '../server/db';
+import { api } from '../api/client';
+import type { RunDetails, RunSummary } from '../types';
 
-type RunWithFeedbacks = RunData & { created_at: string; feedbacks: FeedbackData[] };
+type RunWithFeedbacks = RunDetails;
+type RunListItem = RunSummary;
 
 export function Dashboard({ onBack }: { onBack: () => void }) {
-    const [runs, setRuns] = useState<RunWithFeedbacks[]>([]);
+    const [runs, setRuns] = useState<RunListItem[]>([]);
     const [selectedRun, setSelectedRun] = useState<RunWithFeedbacks | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch('/api/runs')
-            .then(res => res.json())
-            .then(data => {
+        api.listRuns()
+            .then(async (data) => {
                 setRuns(data);
-                if (data.length > 0) setSelectedRun(data[0]);
+                if (data.length > 0) {
+                    const run = await api.getRun(data[0].id);
+                    setSelectedRun(run);
+                }
                 setLoading(false);
             })
             .catch(err => {
@@ -59,7 +63,11 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                             {runs.map(run => (
                                 <button
                                     key={run.id}
-                                    onClick={() => setSelectedRun(run)}
+                                    onClick={() => {
+                                        api.getRun(run.id)
+                                            .then((details) => setSelectedRun(details))
+                                            .catch((error) => console.error('Failed to load run details:', error));
+                                    }}
                                     className={`w-full text-left p-4 rounded-xl transition-all ${selectedRun?.id === run.id
                                             ? 'bg-indigo-500/10 border-indigo-500/30 ring-1 ring-indigo-500/50'
                                             : 'bg-zinc-800/50 border-transparent hover:bg-zinc-800'
@@ -71,7 +79,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                                     </div>
                                     <div className="text-xs text-zinc-500 flex items-center">
                                         <Calendar className="w-3 h-3 mr-1" />
-                                        {formatDate(run.created_at)}
+                                        {formatDate(run.createdAt)}
                                     </div>
                                 </button>
                             ))}
@@ -91,7 +99,7 @@ export function Dashboard({ onBack }: { onBack: () => void }) {
                                 <div className="flex gap-4 text-sm text-zinc-400">
                                     <div className="flex items-center">
                                         <Calendar className="w-4 h-4 mr-1.5" />
-                                        {formatDate(selectedRun.created_at)}
+                                        {formatDate(selectedRun.createdAt)}
                                     </div>
                                     <div className="flex items-center">
                                         <Clock className="w-4 h-4 mr-1.5" />

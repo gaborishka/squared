@@ -97,6 +97,13 @@ function migratePackagedLegacyData(paths: ReturnType<typeof getElectronPaths>): 
 async function ensureBundledServer(): Promise<number> {
   if (isDev) return DEFAULT_SERVER_PORT;
   if (bundledServer && bundledServerPort !== null) return bundledServerPort;
+  if (!process.env.DATABASE_URL?.trim()) {
+    dialog.showErrorBox(
+      'Squared requires PostgreSQL',
+      'DATABASE_URL is not configured. The desktop app launches a local API server, but that server now requires a PostgreSQL connection.',
+    );
+    throw new Error('DATABASE_URL is required for the packaged desktop app.');
+  }
 
   const paths = getElectronPaths();
   migratePackagedLegacyData(paths);

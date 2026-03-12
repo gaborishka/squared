@@ -271,11 +271,15 @@ export function useDeliveryLiveAPI({
   contextText,
   onUpdate,
   onSlideAnalysis,
+  onTranscriptSegment,
+  onMediaStream,
 }: {
   mode: 'rehearsal' | 'presentation';
   contextText?: string;
   onUpdate?: (data: DeliveryAgentUpdate) => void;
   onSlideAnalysis?: (payload: SlideAnalysisToolPayload) => void;
+  onTranscriptSegment?: (payload: { text: string; capturedAt: number }) => void;
+  onMediaStream?: (stream: MediaStream | null) => void;
 }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -392,6 +396,7 @@ export function useDeliveryLiveAPI({
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      onMediaStream?.(null);
     }
     if (videoIntervalRef.current) {
       clearInterval(videoIntervalRef.current);
@@ -471,6 +476,7 @@ export function useDeliveryLiveAPI({
       }
 
       streamRef.current = stream;
+      onMediaStream?.(stream);
       if (stream.getVideoTracks().length > 0) {
         videoElement.srcObject = stream;
       }
@@ -561,11 +567,13 @@ export function useDeliveryLiveAPI({
       };
 
       const ingestInputTranscript = (rawText: string) => {
-        const normalized = rawText.trim().toLowerCase();
+        const trimmed = rawText.trim();
+        const normalized = trimmed.toLowerCase();
         if (!normalized) return;
 
         const now = Date.now();
         let delta = normalized;
+        let deltaText = trimmed;
         const previousChunk = lastTranscriptChunkRef.current;
 
         if (previousChunk) {
@@ -575,6 +583,7 @@ export function useDeliveryLiveAPI({
           }
           if (normalized.startsWith(previousChunk)) {
             delta = normalized.slice(previousChunk.length);
+            deltaText = trimmed.slice(previousChunk.length).trim();
           } else if (previousChunk.startsWith(normalized)) {
             lastSpeechTimestampRef.current = now;
             return;
@@ -589,6 +598,9 @@ export function useDeliveryLiveAPI({
           recentWordTimestampsRef.current.push(now);
         }
 
+        if (deltaText) {
+          onTranscriptSegment?.({ text: deltaText, capturedAt: now });
+        }
         if (words.length === 0) return;
 
         const breakdown = fillerBreakdownRef.current;
@@ -1149,7 +1161,9 @@ export function useDeliveryLiveAPI({
     contextText,
     disconnect,
     mode,
+    onMediaStream,
     onSlideAnalysis,
+    onTranscriptSegment,
     onUpdate,
     pushContextNote,
     resetDerivedIndicatorsState,

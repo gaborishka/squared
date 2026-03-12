@@ -24,3 +24,7 @@ export function getLegacyDatabasePath(): string {
 export function getUploadsDir(): string {
   return path.resolve(resolveDataRoot(), 'uploads');
 }
+
+export function getRunArtifactsDir(): string {
+  return path.resolve(resolveDataRoot(), 'run-artifacts');
+}

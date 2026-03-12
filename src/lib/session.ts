@@ -4,6 +4,7 @@ import type {
   DeliveryAgentState,
   GamePlan,
   IndicatorData,
+  LiveMemoryCue,
   ProjectAnalysis,
   ProjectDetails,
   RunFeedback,
@@ -149,7 +150,26 @@ function buildSlideOutline(project: ProjectDetails): string {
   return outline;
 }
 
-export function buildRehearsalContext(project: ProjectDetails, analysis: ProjectAnalysis | null): string {
+function buildMemorySummary(memoryBySlide: Record<number, LiveMemoryCue[]> | null | undefined): string {
+  if (!memoryBySlide) return 'No rehearsal memory indexed yet.';
+
+  const lines = Object.entries(memoryBySlide)
+    .map(([slideNumber, cues]) => {
+      const cue = cues[0];
+      if (!cue) return null;
+      return `Slide ${slideNumber}: ${cue.cueText} (${cue.sourceType}, score ${cue.similarityScore.toFixed(2)})`;
+    })
+    .filter((value): value is string => Boolean(value))
+    .slice(0, 6);
+
+  return lines.length > 0 ? lines.join('\n') : 'No rehearsal memory indexed yet.';
+}
+
+export function buildRehearsalContext(
+  project: ProjectDetails,
+  analysis: ProjectAnalysis | null,
+  memoryBySlide?: Record<number, LiveMemoryCue[]> | null,
+): string {
   const riskSummary = analysis?.riskSegments.length
     ? analysis.riskSegments
         .slice(0, 8)
@@ -166,15 +186,26 @@ export function buildRehearsalContext(project: ProjectDetails, analysis: Project
     buildSlideOutline(project),
     'Prior weak spots and risky transitions:',
     riskSummary,
+    'Historical memory cues:',
+    buildMemorySummary(memoryBySlide),
     'Instructions:',
     '- Track which slide the speaker is currently on.',
     '- Use updateIndicators for live UI/HUD updates, including currentSlide and microPrompt when useful.',
     '- Use saveSlideAnalysis for each slide where you identify issues or a strong recovery phrase.',
     '- In rehearsal mode you may interrupt briefly with spoken feedback when the user drifts badly.',
     '- If this is a repeated trouble spot from history, mention that context explicitly.',
+    '- When a historical memory cue is relevant, ground your advice in that prior weak spot or recovery phrase.',
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+export function resolveLiveMemoryCue(
+  memoryBySlide: Record<number, LiveMemoryCue[]> | null | undefined,
+  currentSlide: number | null,
+): LiveMemoryCue | null {
+  if (!memoryBySlide || currentSlide == null) return null;
+  return memoryBySlide[currentSlide]?.[0] ?? null;
 }
 
 export function buildPresentationContext(project: ProjectDetails, gamePlan: GamePlan): string {
@@ -220,9 +251,10 @@ export function buildDeliveryContext(options: {
   project: ProjectDetails;
   analysis?: ProjectAnalysis | null;
   gamePlan?: GamePlan | null;
+  memoryBySlide?: Record<number, LiveMemoryCue[]> | null;
 }): string {
   const base = options.mode === 'rehearsal'
-    ? buildRehearsalContext(options.project, options.analysis ?? null)
+    ? buildRehearsalContext(options.project, options.analysis ?? null, options.memoryBySlide ?? null)
     : buildPresentationContext(options.project, options.gamePlan ?? options.analysis?.latestGamePlan ?? {
       id: 'fallback',
       projectId: options.project.id,

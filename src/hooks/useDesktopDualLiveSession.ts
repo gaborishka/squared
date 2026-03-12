@@ -14,6 +14,7 @@ import type {
   DeliveryAgentState,
   DeliveryAgentUpdate,
   GamePlan,
+  LiveMemoryCue,
   ProjectAnalysis,
   ProjectDetails,
   SlideAnalysisToolPayload,
@@ -31,19 +32,25 @@ export function useDesktopDualLiveSession({
   analysis,
   gamePlan,
   onSlideAnalysis,
+  onTranscriptSegment,
+  onMediaStream,
+  memoryBySlide,
 }: {
   mode: 'rehearsal' | 'presentation';
   project: ProjectDetails;
   analysis?: ProjectAnalysis | null;
   gamePlan?: GamePlan | null;
   onSlideAnalysis?: (payload: SlideAnalysisToolPayload) => void;
+  onTranscriptSegment?: (payload: { text: string; capturedAt: number }) => void;
+  onMediaStream?: (stream: MediaStream | null) => void;
+  memoryBySlide?: Record<number, LiveMemoryCue[]> | null;
 }) {
   const [deliveryState, setDeliveryState] = useState<DeliveryAgentState | null>(null);
   const [audienceState, setAudienceState] = useState<AudienceAgentState | null>(null);
 
   const deliveryContext = useMemo(
-    () => buildDeliveryContext({ mode, project, analysis, gamePlan }),
-    [analysis, gamePlan, mode, project],
+    () => buildDeliveryContext({ mode, project, analysis, gamePlan, memoryBySlide }),
+    [analysis, gamePlan, memoryBySlide, mode, project],
   );
   const audienceContext = useMemo(
     () => buildAudienceAgentContext({ mode, project, analysis, gamePlan }),
@@ -76,6 +83,8 @@ export function useDesktopDualLiveSession({
     contextText: deliveryContext,
     onUpdate: handleDeliveryUpdate,
     onSlideAnalysis: handleSlideAnalysis,
+    onTranscriptSegment,
+    onMediaStream,
   });
 
   const {

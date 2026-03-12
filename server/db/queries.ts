@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { PoolClient, QueryResultRow } from 'pg';
 import type {
   GamePlan,
   ProjectDetails,
@@ -6,15 +7,20 @@ import type {
   ProjectSlide,
   ProjectSummary,
   RiskSegment,
+  RunArtifact,
   RunDetails,
   RunFeedback,
+  RunMemoryChunk,
   RunSlideAnalysis,
   RunSummary,
+  RunTranscriptSegment,
   SaveRunPayload,
 } from '../../shared/types.js';
-import { getDatabase } from './database.js';
+import { queryRow, queryRows, toVectorLiteral, withTransaction } from './database.js';
 
-type ProjectRow = {
+type DbTimestamp = string | Date;
+
+type ProjectRow = QueryResultRow & {
   id: string;
   name: string;
   description: string | null;
@@ -22,15 +28,15 @@ type ProjectRow = {
   file_path: string | null;
   file_type: ProjectSummary['fileType'];
   slide_count: number;
-  created_at: string;
-  updated_at: string;
-  run_count: number;
-  rehearsal_run_count: number;
-  presentation_run_count: number;
+  created_at: DbTimestamp;
+  updated_at: DbTimestamp;
+  run_count: string | number;
+  rehearsal_run_count: string | number;
+  presentation_run_count: string | number;
   last_overall_score: number | null;
 };
 
-type ProjectSlideRow = {
+type ProjectSlideRow = QueryResultRow & {
   id: string;
   project_id: string;
   slide_number: number;
@@ -39,7 +45,7 @@ type ProjectSlideRow = {
   speaker_notes: string;
 };
 
-type RunRow = {
+type RunRow = QueryResultRow & {
   id: string;
   project_id: string | null;
   mode: RunSummary['mode'];
@@ -50,10 +56,10 @@ type RunRow = {
   eye_contact_pct: number | null;
   posture_good_pct: number | null;
   overall_score: number | null;
-  created_at: string;
+  created_at: DbTimestamp;
 };
 
-type FeedbackRow = {
+type FeedbackRow = QueryResultRow & {
   id: string;
   run_id: string;
   timestamp: string;
@@ -61,195 +67,139 @@ type FeedbackRow = {
   slide_number: number | null;
   severity: RunFeedback['severity'];
   category: RunFeedback['category'];
+  created_at: DbTimestamp;
 };
 
-type SlideAnalysisRow = {
+type SlideAnalysisRow = QueryResultRow & {
   id: string;
   run_id: string;
   slide_number: number;
-  issues_json: string;
+  issues_json: string[] | string;
   best_phrase: string;
   risk_level: RunSlideAnalysis['riskLevel'];
 };
 
-type RiskSegmentRow = {
+type RunArtifactRow = QueryResultRow & {
+  id: string;
+  run_id: string;
+  kind: RunArtifact['kind'];
+  mime_type: string;
+  file_path: string;
+  start_ms: number | null;
+  end_ms: number | null;
+  created_at: DbTimestamp;
+};
+
+type RunTranscriptSegmentRow = QueryResultRow & {
+  id: string;
+  run_id: string;
+  sequence: number;
+  start_ms: number;
+  end_ms: number;
+  text: string;
+  slide_number: number | null;
+};
+
+type RunMemoryChunkRow = QueryResultRow & {
+  id: string;
+  project_id: string;
+  run_id: string;
+  artifact_id: string | null;
+  source_type: RunMemoryChunk['sourceType'];
+  slide_number: number | null;
+  start_ms: number | null;
+  end_ms: number | null;
+  text_for_embedding: string;
+  cue_text: string;
+  severity: RunMemoryChunk['severity'];
+  risk_level: RunMemoryChunk['riskLevel'];
+  embedding: string | number[];
+  created_at: DbTimestamp;
+};
+
+type RiskSegmentRow = QueryResultRow & {
   id: string;
   project_id: string;
   slide_number: number | null;
   risk_type: RiskSegment['riskType'];
   frequency: number;
   avg_severity: number;
-  last_occurrence: string;
+  last_occurrence: DbTimestamp;
   best_recovery: string;
   notes: string;
 };
 
-type GamePlanRow = {
+type GamePlanRow = QueryResultRow & {
   id: string;
   project_id: string;
   run_count: number;
-  plan_json: string;
-  created_at: string;
+  plan_json: Omit<GamePlan, 'id' | 'projectId' | 'runCount' | 'createdAt'> | string;
+  created_at: DbTimestamp;
 };
 
-const db = getDatabase();
+type MemorySearchRow = RunMemoryChunkRow & {
+  similarity_score: number;
+  rank_score: number;
+};
 
-const baseProjectListSql = `
+const PROJECT_SELECT_SQL = `
   SELECT
     p.*,
-    COUNT(r.id) AS run_count,
-    SUM(CASE WHEN r.mode = 'rehearsal' THEN 1 ELSE 0 END) AS rehearsal_run_count,
-    SUM(CASE WHEN r.mode = 'presentation' THEN 1 ELSE 0 END) AS presentation_run_count,
-    (
-      SELECT r2.overall_score
-      FROM runs r2
-      WHERE r2.project_id = p.id AND r2.overall_score IS NOT NULL
-      ORDER BY r2.created_at DESC
-      LIMIT 1
-    ) AS last_overall_score
+    COALESCE(run_stats.run_count, 0) AS run_count,
+    COALESCE(run_stats.rehearsal_run_count, 0) AS rehearsal_run_count,
+    COALESCE(run_stats.presentation_run_count, 0) AS presentation_run_count,
+    last_run.last_overall_score
   FROM projects p
-  LEFT JOIN runs r ON r.project_id = p.id
-  GROUP BY p.id
-  ORDER BY p.updated_at DESC
+  LEFT JOIN (
+    SELECT
+      project_id,
+      COUNT(*) AS run_count,
+      COUNT(*) FILTER (WHERE mode = 'rehearsal') AS rehearsal_run_count,
+      COUNT(*) FILTER (WHERE mode = 'presentation') AS presentation_run_count
+    FROM runs
+    GROUP BY project_id
+  ) AS run_stats ON run_stats.project_id = p.id
+  LEFT JOIN LATERAL (
+    SELECT overall_score AS last_overall_score
+    FROM runs r2
+    WHERE r2.project_id = p.id AND r2.overall_score IS NOT NULL
+    ORDER BY r2.created_at DESC
+    LIMIT 1
+  ) AS last_run ON TRUE
 `;
 
-const listProjectsStmt = db.prepare(baseProjectListSql);
-const getProjectStmt = db.prepare(`
-  SELECT *
-  FROM (${baseProjectListSql})
-  WHERE id = ?
-`);
-const getProjectSlidesStmt = db.prepare(`
-  SELECT *
-  FROM project_slides
-  WHERE project_id = ?
-  ORDER BY slide_number ASC
-`);
-const insertProjectStmt = db.prepare(`
-  INSERT INTO projects (id, name, description, content, file_path, file_type, slide_count, updated_at)
-  VALUES (@id, @name, @description, @content, @filePath, @fileType, @slideCount, CURRENT_TIMESTAMP)
-`);
-const updateProjectMetaStmt = db.prepare(`
-  UPDATE projects
-  SET name = @name,
-      description = @description,
-      updated_at = CURRENT_TIMESTAMP
-  WHERE id = @id
-`);
-const updateProjectSlideNotesStmt = db.prepare(`
-  UPDATE project_slides
-  SET speaker_notes = @speakerNotes
-  WHERE id = @id AND project_id = @projectId
-`);
-const deleteProjectStmt = db.prepare(`DELETE FROM projects WHERE id = ?`);
-const replaceProjectUploadMetaStmt = db.prepare(`
-  UPDATE projects
-  SET content = @content,
-      file_path = @filePath,
-      file_type = @fileType,
-      slide_count = @slideCount,
-      updated_at = CURRENT_TIMESTAMP
-  WHERE id = @id
-`);
-const deleteProjectSlidesStmt = db.prepare(`DELETE FROM project_slides WHERE project_id = ?`);
-const insertProjectSlideStmt = db.prepare(`
-  INSERT INTO project_slides (id, project_id, slide_number, title, content, speaker_notes)
-  VALUES (@id, @projectId, @slideNumber, @title, @content, @speakerNotes)
-`);
-const listRunsStmt = db.prepare(`
-  SELECT *
-  FROM runs
-  WHERE (@projectId IS NULL OR project_id = @projectId)
-  ORDER BY created_at DESC
-`);
-const getRunStmt = db.prepare(`SELECT * FROM runs WHERE id = ?`);
-const getRunFeedbacksStmt = db.prepare(`
-  SELECT *
-  FROM feedbacks
-  WHERE run_id = ?
-  ORDER BY rowid ASC
-`);
-const getRunSlideAnalysesStmt = db.prepare(`
-  SELECT *
-  FROM run_slide_analyses
-  WHERE run_id = ?
-  ORDER BY slide_number ASC, created_at ASC
-`);
-const insertRunStmt = db.prepare(`
-  INSERT INTO runs (
-    id,
-    project_id,
-    mode,
-    duration,
-    avg_pace_wpm,
-    avg_confidence,
-    filler_word_count,
-    eye_contact_pct,
-    posture_good_pct,
-    overall_score
-  ) VALUES (
-    @id,
-    @projectId,
-    @mode,
-    @duration,
-    @avgPaceWpm,
-    @avgConfidence,
-    @fillerWordCount,
-    @eyeContactPct,
-    @postureGoodPct,
-    @overallScore
-  )
-`);
-const insertFeedbackStmt = db.prepare(`
-  INSERT INTO feedbacks (id, run_id, timestamp, message, slide_number, severity, category)
-  VALUES (@id, @runId, @timestamp, @message, @slideNumber, @severity, @category)
-`);
-const insertRunSlideAnalysisStmt = db.prepare(`
-  INSERT INTO run_slide_analyses (id, run_id, slide_number, issues_json, best_phrase, risk_level)
-  VALUES (@id, @runId, @slideNumber, @issuesJson, @bestPhrase, @riskLevel)
-`);
-const listRiskSegmentsStmt = db.prepare(`
-  SELECT *
-  FROM risk_segments
-  WHERE project_id = ?
-  ORDER BY COALESCE(slide_number, 9999) ASC, avg_severity DESC
-`);
-const deleteRiskSegmentsStmt = db.prepare(`DELETE FROM risk_segments WHERE project_id = ?`);
-const insertRiskSegmentStmt = db.prepare(`
-  INSERT INTO risk_segments (
-    id,
-    project_id,
-    slide_number,
-    risk_type,
-    frequency,
-    avg_severity,
-    last_occurrence,
-    best_recovery,
-    notes
-  ) VALUES (
-    @id,
-    @projectId,
-    @slideNumber,
-    @riskType,
-    @frequency,
-    @avgSeverity,
-    @lastOccurrence,
-    @bestRecovery,
-    @notes
-  )
-`);
-const insertGamePlanStmt = db.prepare(`
-  INSERT INTO game_plans (id, project_id, run_count, plan_json)
-  VALUES (@id, @projectId, @runCount, @planJson)
-`);
-const getGamePlanStmt = db.prepare(`SELECT * FROM game_plans WHERE id = ?`);
-const getLatestGamePlanStmt = db.prepare(`
-  SELECT *
-  FROM game_plans
-  WHERE project_id = ?
-  ORDER BY created_at DESC
-  LIMIT 1
-`);
+function timestampToIso(value: DbTimestamp | null | undefined): string {
+  if (!value) return new Date().toISOString();
+  return value instanceof Date ? value.toISOString() : value;
+}
+
+function parseIssues(value: SlideAnalysisRow['issues_json']): string[] {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  return JSON.parse(value) as string[];
+}
+
+function parsePlanJson(value: GamePlanRow['plan_json']): Omit<GamePlan, 'id' | 'projectId' | 'runCount' | 'createdAt'> {
+  if (typeof value === 'string') {
+    return JSON.parse(value) as Omit<GamePlan, 'id' | 'projectId' | 'runCount' | 'createdAt'>;
+  }
+  return value;
+}
+
+function parseEmbedding(value: RunMemoryChunkRow['embedding']): number[] {
+  if (Array.isArray(value)) return value.map(Number);
+  const trimmed = String(value).trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    return JSON.parse(trimmed) as number[];
+  }
+  return trimmed
+    .replace(/^\[/, '')
+    .replace(/\]$/, '')
+    .split(',')
+    .map((entry) => Number(entry.trim()))
+    .filter((entry) => !Number.isNaN(entry));
+}
 
 function mapProjectSummary(row: ProjectRow): ProjectSummary {
   return {
@@ -260,8 +210,8 @@ function mapProjectSummary(row: ProjectRow): ProjectSummary {
     filePath: row.file_path,
     fileType: row.file_type ?? null,
     slideCount: row.slide_count ?? 0,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: timestampToIso(row.created_at),
+    updatedAt: timestampToIso(row.updated_at),
     runCount: Number(row.run_count ?? 0),
     rehearsalRunCount: Number(row.rehearsal_run_count ?? 0),
     presentationRunCount: Number(row.presentation_run_count ?? 0),
@@ -292,7 +242,7 @@ function mapRunSummary(row: RunRow): RunSummary {
     eyeContactPct: row.eye_contact_pct,
     postureGoodPct: row.posture_good_pct,
     overallScore: row.overall_score,
-    createdAt: row.created_at,
+    createdAt: timestampToIso(row.created_at),
   };
 }
 
@@ -313,9 +263,53 @@ function mapRunSlideAnalysis(row: SlideAnalysisRow): RunSlideAnalysis {
     id: row.id,
     runId: row.run_id,
     slideNumber: row.slide_number,
-    issues: JSON.parse(row.issues_json) as string[],
+    issues: parseIssues(row.issues_json),
     bestPhrase: row.best_phrase,
     riskLevel: row.risk_level,
+  };
+}
+
+function mapRunArtifact(row: RunArtifactRow): RunArtifact {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    kind: row.kind,
+    mimeType: row.mime_type,
+    filePath: row.file_path,
+    startMs: row.start_ms,
+    endMs: row.end_ms,
+    createdAt: timestampToIso(row.created_at),
+  };
+}
+
+function mapRunTranscriptSegment(row: RunTranscriptSegmentRow): RunTranscriptSegment {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    sequence: row.sequence,
+    startMs: row.start_ms,
+    endMs: row.end_ms,
+    text: row.text,
+    slideNumber: row.slide_number,
+  };
+}
+
+function mapRunMemoryChunk(row: RunMemoryChunkRow): RunMemoryChunk {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    artifactId: row.artifact_id,
+    sourceType: row.source_type,
+    slideNumber: row.slide_number,
+    startMs: row.start_ms,
+    endMs: row.end_ms,
+    textForEmbedding: row.text_for_embedding,
+    cueText: row.cue_text,
+    severity: row.severity,
+    riskLevel: row.risk_level,
+    embedding: parseEmbedding(row.embedding),
+    createdAt: timestampToIso(row.created_at),
   };
 }
 
@@ -326,81 +320,87 @@ function mapRiskSegment(row: RiskSegmentRow): RiskSegment {
     slideNumber: row.slide_number,
     riskType: row.risk_type,
     frequency: row.frequency,
-    avgSeverity: row.avg_severity,
-    lastOccurrence: row.last_occurrence,
+    avgSeverity: Number(row.avg_severity),
+    lastOccurrence: timestampToIso(row.last_occurrence),
     bestRecovery: row.best_recovery,
     notes: row.notes,
   };
 }
 
 function mapGamePlan(row: GamePlanRow): GamePlan {
-  const parsed = JSON.parse(row.plan_json) as Omit<GamePlan, 'id' | 'projectId' | 'runCount' | 'createdAt'>;
+  const parsed = parsePlanJson(row.plan_json);
   return {
     id: row.id,
     projectId: row.project_id,
     runCount: row.run_count,
-    createdAt: row.created_at,
+    createdAt: timestampToIso(row.created_at),
     ...parsed,
   };
 }
 
-export function listProjects(): ProjectSummary[] {
-  return (listProjectsStmt.all() as ProjectRow[]).map(mapProjectSummary);
+async function getProjectSummaryRow(id: string, client?: Pick<PoolClient, 'query'>): Promise<ProjectRow | null> {
+  return queryRow<ProjectRow>(`${PROJECT_SELECT_SQL} WHERE p.id = $1`, [id], client);
 }
 
-export function getProject(id: string): ProjectDetails | null {
-  const row = getProjectStmt.get(id) as ProjectRow | undefined;
+export async function listProjects(): Promise<ProjectSummary[]> {
+  const rows = await queryRows<ProjectRow>(`${PROJECT_SELECT_SQL} ORDER BY p.updated_at DESC`);
+  return rows.map(mapProjectSummary);
+}
+
+export async function getProject(id: string): Promise<ProjectDetails | null> {
+  const row = await getProjectSummaryRow(id);
   if (!row) return null;
+  const slides = await queryRows<ProjectSlideRow>(
+    `SELECT * FROM project_slides WHERE project_id = $1 ORDER BY slide_number ASC`,
+    [id],
+  );
   return {
     ...mapProjectSummary(row),
-    slides: (getProjectSlidesStmt.all(id) as ProjectSlideRow[]).map(mapProjectSlide),
+    slides: slides.map(mapProjectSlide),
   };
 }
 
-export function createProject(input: ProjectInput): ProjectDetails {
+export async function createProject(input: ProjectInput): Promise<ProjectDetails> {
   const id = crypto.randomUUID();
-  insertProjectStmt.run({
-    id,
-    name: input.name.trim(),
-    description: input.description?.trim() ?? '',
-    content: '',
-    filePath: null,
-    fileType: null,
-    slideCount: 0,
-  });
-  return getProject(id)!;
+  await queryRows(
+    `INSERT INTO projects (id, name, description, content, file_path, file_type, slide_count)
+     VALUES ($1, $2, $3, '', NULL, NULL, 0)`,
+    [id, input.name.trim(), input.description?.trim() ?? ''],
+  );
+  return (await getProject(id))!;
 }
 
-export function updateProject(id: string, input: ProjectInput): ProjectDetails | null {
-  const existing = getProject(id);
+export async function updateProject(id: string, input: ProjectInput): Promise<ProjectDetails | null> {
+  const existing = await getProject(id);
   if (!existing) return null;
 
-  const transaction = db.transaction(() => {
-    updateProjectMetaStmt.run({
-      id,
-      name: input.name.trim(),
-      description: input.description?.trim() ?? '',
-    });
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE projects
+       SET name = $2, description = $3, updated_at = NOW()
+       WHERE id = $1`,
+      [id, input.name.trim(), input.description?.trim() ?? ''],
+    );
 
     for (const slide of input.slides ?? []) {
-      updateProjectSlideNotesStmt.run({
-        id: slide.id,
-        projectId: id,
-        speakerNotes: slide.speakerNotes,
-      });
+      await client.query(
+        `UPDATE project_slides
+         SET speaker_notes = $3
+         WHERE id = $1 AND project_id = $2`,
+        [slide.id, id, slide.speakerNotes],
+      );
     }
   });
 
-  transaction();
   return getProject(id);
 }
 
-export function deleteProject(id: string): boolean {
-  const result = deleteProjectStmt.run(id);
-  return result.changes > 0;
+export async function deleteProject(id: string): Promise<boolean> {
+  const result = await queryRows<QueryResultRow>(`DELETE FROM projects WHERE id = $1 RETURNING id`, [id]);
+  return result.length > 0;
 }
 
-export function replaceProjectUpload(
+export async function replaceProjectUpload(
   projectId: string,
   fileMeta: {
     content: string;
@@ -409,139 +409,289 @@ export function replaceProjectUpload(
     slideCount: number;
   },
   slides: Array<Pick<ProjectSlide, 'slideNumber' | 'title' | 'content' | 'speakerNotes'>>,
-): ProjectDetails | null {
-  if (!getProject(projectId)) return null;
+): Promise<ProjectDetails | null> {
+  const existing = await getProject(projectId);
+  if (!existing) return null;
 
-  const transaction = db.transaction(() => {
-    replaceProjectUploadMetaStmt.run({
-      id: projectId,
-      content: fileMeta.content,
-      filePath: fileMeta.filePath,
-      fileType: fileMeta.fileType,
-      slideCount: fileMeta.slideCount,
-    });
-    deleteProjectSlidesStmt.run(projectId);
+  await withTransaction(async (client) => {
+    await client.query(
+      `UPDATE projects
+       SET content = $2,
+           file_path = $3,
+           file_type = $4,
+           slide_count = $5,
+           updated_at = NOW()
+       WHERE id = $1`,
+      [projectId, fileMeta.content, fileMeta.filePath, fileMeta.fileType, fileMeta.slideCount],
+    );
+
+    await client.query(`DELETE FROM project_slides WHERE project_id = $1`, [projectId]);
+
     for (const slide of slides) {
-      insertProjectSlideStmt.run({
-        id: crypto.randomUUID(),
-        projectId,
-        slideNumber: slide.slideNumber,
-        title: slide.title,
-        content: slide.content,
-        speakerNotes: slide.speakerNotes,
-      });
+      await client.query(
+        `INSERT INTO project_slides (id, project_id, slide_number, title, content, speaker_notes)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [crypto.randomUUID(), projectId, slide.slideNumber, slide.title, slide.content, slide.speakerNotes],
+      );
     }
   });
 
-  transaction();
   return getProject(projectId);
 }
 
-export function listRuns(projectId?: string): RunSummary[] {
-  return (listRunsStmt.all({ projectId: projectId ?? null }) as RunRow[]).map(mapRunSummary);
+export async function listRuns(projectId?: string): Promise<RunSummary[]> {
+  const rows = await queryRows<RunRow>(
+    `SELECT *
+     FROM runs
+     WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+     ORDER BY created_at DESC`,
+    [projectId ?? null],
+  );
+  return rows.map(mapRunSummary);
 }
 
-export function getRun(id: string): RunDetails | null {
-  const row = getRunStmt.get(id) as RunRow | undefined;
+export async function getRun(id: string): Promise<RunDetails | null> {
+  const row = await queryRow<RunRow>(`SELECT * FROM runs WHERE id = $1`, [id]);
   if (!row) return null;
+
+  const [feedbacks, slideAnalyses, artifacts, transcriptSegments] = await Promise.all([
+    queryRows<FeedbackRow>(`SELECT * FROM feedbacks WHERE run_id = $1 ORDER BY created_at ASC, id ASC`, [id]),
+    queryRows<SlideAnalysisRow>(`SELECT * FROM run_slide_analyses WHERE run_id = $1 ORDER BY slide_number ASC, created_at ASC`, [id]),
+    queryRows<RunArtifactRow>(`SELECT * FROM run_artifacts WHERE run_id = $1 ORDER BY created_at ASC, id ASC`, [id]),
+    queryRows<RunTranscriptSegmentRow>(`SELECT * FROM run_transcript_segments WHERE run_id = $1 ORDER BY sequence ASC, created_at ASC`, [id]),
+  ]);
+
   return {
     ...mapRunSummary(row),
-    feedbacks: (getRunFeedbacksStmt.all(id) as FeedbackRow[]).map(mapFeedback),
-    slideAnalyses: (getRunSlideAnalysesStmt.all(id) as SlideAnalysisRow[]).map(mapRunSlideAnalysis),
+    feedbacks: feedbacks.map(mapFeedback),
+    slideAnalyses: slideAnalyses.map(mapRunSlideAnalysis),
+    artifacts: artifacts.map(mapRunArtifact),
+    transcriptSegments: transcriptSegments.map(mapRunTranscriptSegment),
     runReport: null,
   };
 }
 
-export function saveRun(payload: SaveRunPayload): RunDetails {
-  const transaction = db.transaction(() => {
-    insertRunStmt.run({
-      id: payload.run.id,
-      projectId: payload.run.projectId,
-      mode: payload.run.mode,
-      duration: payload.run.duration,
-      avgPaceWpm: payload.run.avgPaceWpm,
-      avgConfidence: payload.run.avgConfidence,
-      fillerWordCount: payload.run.fillerWordCount,
-      eyeContactPct: payload.run.eyeContactPct,
-      postureGoodPct: payload.run.postureGoodPct,
-      overallScore: payload.run.overallScore,
-    });
+export async function saveRun(payload: SaveRunPayload): Promise<RunDetails> {
+  await withTransaction(async (client) => {
+    await client.query(
+      `INSERT INTO runs (
+        id, project_id, mode, duration, avg_pace_wpm, avg_confidence,
+        filler_word_count, eye_contact_pct, posture_good_pct, overall_score
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        payload.run.id,
+        payload.run.projectId,
+        payload.run.mode,
+        payload.run.duration,
+        payload.run.avgPaceWpm,
+        payload.run.avgConfidence,
+        payload.run.fillerWordCount,
+        payload.run.eyeContactPct,
+        payload.run.postureGoodPct,
+        payload.run.overallScore,
+      ],
+    );
 
     for (const feedback of payload.feedbacks) {
-      insertFeedbackStmt.run({
-        id: feedback.id,
-        runId: payload.run.id,
-        timestamp: feedback.timestamp,
-        message: feedback.message,
-        slideNumber: feedback.slideNumber,
-        severity: feedback.severity,
-        category: feedback.category,
-      });
+      await client.query(
+        `INSERT INTO feedbacks (id, run_id, timestamp, message, slide_number, severity, category)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [feedback.id, payload.run.id, feedback.timestamp, feedback.message, feedback.slideNumber, feedback.severity, feedback.category],
+      );
     }
 
     for (const slideAnalysis of payload.slideAnalyses) {
-      insertRunSlideAnalysisStmt.run({
-        id: crypto.randomUUID(),
-        runId: payload.run.id,
-        slideNumber: slideAnalysis.slideNumber,
-        issuesJson: JSON.stringify(slideAnalysis.issues),
-        bestPhrase: slideAnalysis.bestPhrase,
-        riskLevel: slideAnalysis.riskLevel,
-      });
+      await client.query(
+        `INSERT INTO run_slide_analyses (id, run_id, slide_number, issues_json, best_phrase, risk_level)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6)`,
+        [
+          crypto.randomUUID(),
+          payload.run.id,
+          slideAnalysis.slideNumber,
+          JSON.stringify(slideAnalysis.issues),
+          slideAnalysis.bestPhrase,
+          slideAnalysis.riskLevel,
+        ],
+      );
+    }
+
+    for (const artifact of payload.artifacts ?? []) {
+      await client.query(
+        `INSERT INTO run_artifacts (id, run_id, kind, mime_type, file_path, start_ms, end_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [artifact.id, payload.run.id, artifact.kind, artifact.mimeType, artifact.filePath, artifact.startMs, artifact.endMs],
+      );
+    }
+
+    for (const segment of payload.transcriptSegments ?? []) {
+      await client.query(
+        `INSERT INTO run_transcript_segments (id, run_id, sequence, start_ms, end_ms, text, slide_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [segment.id, payload.run.id, segment.sequence, segment.startMs, segment.endMs, segment.text, segment.slideNumber],
+      );
     }
   });
 
-  transaction();
-  return getRun(payload.run.id)!;
+  return (await getRun(payload.run.id))!;
 }
 
-export function listRiskSegments(projectId: string): RiskSegment[] {
-  return (listRiskSegmentsStmt.all(projectId) as RiskSegmentRow[]).map(mapRiskSegment);
+export async function listRiskSegments(projectId: string): Promise<RiskSegment[]> {
+  const rows = await queryRows<RiskSegmentRow>(
+    `SELECT * FROM risk_segments
+     WHERE project_id = $1
+     ORDER BY COALESCE(slide_number, 9999) ASC, avg_severity DESC`,
+    [projectId],
+  );
+  return rows.map(mapRiskSegment);
 }
 
-export function replaceRiskSegments(projectId: string, segments: RiskSegment[]): RiskSegment[] {
-  const transaction = db.transaction(() => {
-    deleteRiskSegmentsStmt.run(projectId);
+export async function replaceRiskSegments(projectId: string, segments: RiskSegment[]): Promise<RiskSegment[]> {
+  await withTransaction(async (client) => {
+    await client.query(`DELETE FROM risk_segments WHERE project_id = $1`, [projectId]);
     for (const segment of segments) {
-      insertRiskSegmentStmt.run({
-        id: segment.id,
-        projectId,
-        slideNumber: segment.slideNumber,
-        riskType: segment.riskType,
-        frequency: segment.frequency,
-        avgSeverity: segment.avgSeverity,
-        lastOccurrence: segment.lastOccurrence,
-        bestRecovery: segment.bestRecovery,
-        notes: segment.notes,
-      });
+      await client.query(
+        `INSERT INTO risk_segments (
+          id, project_id, slide_number, risk_type, frequency, avg_severity,
+          last_occurrence, best_recovery, notes
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          segment.id,
+          projectId,
+          segment.slideNumber,
+          segment.riskType,
+          segment.frequency,
+          segment.avgSeverity,
+          segment.lastOccurrence,
+          segment.bestRecovery,
+          segment.notes,
+        ],
+      );
     }
   });
 
-  transaction();
   return listRiskSegments(projectId);
 }
 
-export function saveGamePlan(plan: GamePlan): GamePlan {
-  insertGamePlanStmt.run({
-    id: plan.id,
-    projectId: plan.projectId,
-    runCount: plan.runCount,
-    planJson: JSON.stringify({
-      overview: plan.overview,
-      segments: plan.segments,
-      attentionBudget: plan.attentionBudget,
-      timingStrategy: plan.timingStrategy,
-    }),
+export async function saveGamePlan(plan: GamePlan): Promise<GamePlan> {
+  await queryRows(
+    `INSERT INTO game_plans (id, project_id, run_count, plan_json, created_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5)`,
+    [
+      plan.id,
+      plan.projectId,
+      plan.runCount,
+      JSON.stringify({
+        overview: plan.overview,
+        segments: plan.segments,
+        attentionBudget: plan.attentionBudget,
+        timingStrategy: plan.timingStrategy,
+      }),
+      plan.createdAt,
+    ],
+  );
+  return (await getGamePlan(plan.id))!;
+}
+
+export async function getGamePlan(id: string): Promise<GamePlan | null> {
+  const row = await queryRow<GamePlanRow>(`SELECT * FROM game_plans WHERE id = $1`, [id]);
+  return row ? mapGamePlan(row) : null;
+}
+
+export async function getLatestGamePlan(projectId: string): Promise<GamePlan | null> {
+  const row = await queryRow<GamePlanRow>(
+    `SELECT * FROM game_plans WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [projectId],
+  );
+  return row ? mapGamePlan(row) : null;
+}
+
+export async function listRunMemoryChunks(projectId: string, runId?: string): Promise<RunMemoryChunk[]> {
+  const rows = await queryRows<RunMemoryChunkRow>(
+    `SELECT
+       id, project_id, run_id, artifact_id, source_type, slide_number, start_ms, end_ms,
+       text_for_embedding, cue_text, severity, risk_level, embedding::text AS embedding, created_at
+     FROM run_memory_chunks
+     WHERE project_id = $1
+       AND ($2::uuid IS NULL OR run_id = $2::uuid)
+     ORDER BY created_at DESC, id DESC`,
+    [projectId, runId ?? null],
+  );
+  return rows.map(mapRunMemoryChunk);
+}
+
+export async function replaceRunMemoryChunks(runId: string, projectId: string, chunks: RunMemoryChunk[]): Promise<RunMemoryChunk[]> {
+  await withTransaction(async (client) => {
+    await client.query(`DELETE FROM run_memory_chunks WHERE run_id = $1`, [runId]);
+    for (const chunk of chunks) {
+      await client.query(
+        `INSERT INTO run_memory_chunks (
+          id, project_id, run_id, artifact_id, source_type, slide_number, start_ms, end_ms,
+          text_for_embedding, cue_text, severity, risk_level, embedding, created_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8,
+          $9, $10, $11, $12, $13::vector, $14
+        )`,
+        [
+          chunk.id,
+          projectId,
+          runId,
+          chunk.artifactId,
+          chunk.sourceType,
+          chunk.slideNumber,
+          chunk.startMs,
+          chunk.endMs,
+          chunk.textForEmbedding,
+          chunk.cueText,
+          chunk.severity,
+          chunk.riskLevel,
+          toVectorLiteral(chunk.embedding),
+          chunk.createdAt,
+        ],
+      );
+    }
   });
-  return getGamePlan(plan.id)!;
+
+  return listRunMemoryChunks(projectId, runId);
 }
 
-export function getGamePlan(id: string): GamePlan | null {
-  const row = getGamePlanStmt.get(id) as GamePlanRow | undefined;
-  return row ? mapGamePlan(row) : null;
-}
+export async function searchRunMemoryChunks(
+  projectId: string,
+  queryEmbedding: number[],
+  filters?: { slideNumber?: number | null; limit?: number; runId?: string },
+): Promise<Array<{ chunk: RunMemoryChunk; similarityScore: number; rankScore: number }>> {
+  const rows = await queryRows<MemorySearchRow>(
+    `SELECT
+       id, project_id, run_id, artifact_id, source_type, slide_number, start_ms, end_ms,
+       text_for_embedding, cue_text, severity, risk_level, embedding::text AS embedding, created_at,
+       (1 - (embedding <=> $2::vector)) AS similarity_score,
+       (
+         (1 - (embedding <=> $2::vector))
+         + CASE WHEN $3::int IS NOT NULL AND slide_number = $3::int THEN 0.12 ELSE 0 END
+         + CASE WHEN source_type = 'recovery_phrase' THEN 0.07
+                WHEN source_type = 'flagged_moment' THEN 0.04
+                ELSE 0 END
+         + CASE WHEN severity = 'critical' THEN 0.03
+                WHEN severity = 'warning' THEN 0.015
+                ELSE 0 END
+       ) AS rank_score
+     FROM run_memory_chunks
+     WHERE project_id = $1
+       AND ($4::uuid IS NULL OR run_id = $4::uuid)
+       AND ($3::int IS NULL OR slide_number = $3::int OR slide_number IS NULL)
+     ORDER BY rank_score DESC, created_at DESC
+     LIMIT $5`,
+    [
+      projectId,
+      toVectorLiteral(queryEmbedding),
+      filters?.slideNumber ?? null,
+      filters?.runId ?? null,
+      filters?.limit ?? 5,
+    ],
+  );
 
-export function getLatestGamePlan(projectId: string): GamePlan | null {
-  const row = getLatestGamePlanStmt.get(projectId) as GamePlanRow | undefined;
-  return row ? mapGamePlan(row) : null;
+  return rows.map((row) => ({
+    chunk: mapRunMemoryChunk(row),
+    similarityScore: Number(row.similarity_score),
+    rankScore: Number(row.rank_score),
+  }));
 }

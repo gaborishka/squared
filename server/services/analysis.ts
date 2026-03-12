@@ -78,10 +78,10 @@ function inferRiskTypes(issue: string): RiskType[] {
   return [...risks];
 }
 
-function getRunDetailsForProject(projectId: string): RunDetails[] {
-  return listRuns(projectId)
-    .map((run) => getRun(run.id))
-    .filter((run): run is RunDetails => Boolean(run));
+async function getRunDetailsForProject(projectId: string): Promise<RunDetails[]> {
+  const runs = await listRuns(projectId);
+  const details = await Promise.all(runs.map((run) => getRun(run.id)));
+  return details.filter((run): run is RunDetails => Boolean(run));
 }
 
 function upsertBucket(
@@ -138,8 +138,8 @@ function buildSlideSummary(project: ProjectDetails, segments: RiskSegment[]): Pr
   });
 }
 
-export function refreshRiskSegments(projectId: string): RiskSegment[] {
-  const runs = getRunDetailsForProject(projectId).filter((run) => run.mode === 'rehearsal');
+export async function refreshRiskSegments(projectId: string): Promise<RiskSegment[]> {
+  const runs = (await getRunDetailsForProject(projectId)).filter((run) => run.mode === 'rehearsal');
   const buckets = new Map<string, MutableRiskBucket>();
 
   for (const run of runs) {
@@ -196,16 +196,16 @@ export function refreshRiskSegments(projectId: string): RiskSegment[] {
   );
 }
 
-export function getProjectAnalysis(projectId: string): ProjectAnalysis | null {
-  const project = getProject(projectId);
+export async function getProjectAnalysis(projectId: string): Promise<ProjectAnalysis | null> {
+  const project = await getProject(projectId);
   if (!project) return null;
 
-  const runs = listRuns(projectId);
+  const runs = await listRuns(projectId);
   const scores = runs
     .filter((run) => run.mode === 'rehearsal')
     .map((run) => run.overallScore)
     .filter((score): score is number => typeof score === 'number');
-  const riskSegments = refreshRiskSegments(projectId);
+  const riskSegments = await refreshRiskSegments(projectId);
 
   return {
     projectId,
@@ -217,10 +217,10 @@ export function getProjectAnalysis(projectId: string): ProjectAnalysis | null {
     trend: calculateTrend(scores),
     riskSegments,
     slideSummary: buildSlideSummary(project, riskSegments),
-    latestGamePlan: getLatestGamePlan(projectId),
+    latestGamePlan: await getLatestGamePlan(projectId),
   };
 }
 
-export function readStoredRiskSegments(projectId: string): RiskSegment[] {
+export function readStoredRiskSegments(projectId: string): Promise<RiskSegment[]> {
   return listRiskSegments(projectId);
 }

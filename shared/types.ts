@@ -129,6 +129,61 @@ export interface RunSlideAnalysis {
   riskLevel: RiskLevel;
 }
 
+export type RunArtifactKind = 'full_recording' | 'derived_clip';
+export type RunMemorySourceType = 'transcript_window' | 'flagged_moment' | 'recovery_phrase';
+
+export interface RunArtifact {
+  id: string;
+  runId: string;
+  kind: RunArtifactKind;
+  mimeType: string;
+  filePath: string;
+  startMs: number | null;
+  endMs: number | null;
+  createdAt: string;
+}
+
+export interface RunTranscriptSegment {
+  id: string;
+  runId: string;
+  sequence: number;
+  startMs: number;
+  endMs: number;
+  text: string;
+  slideNumber: number | null;
+}
+
+export interface RunMemoryChunk {
+  id: string;
+  projectId: string;
+  runId: string;
+  artifactId: string | null;
+  sourceType: RunMemorySourceType;
+  slideNumber: number | null;
+  startMs: number | null;
+  endMs: number | null;
+  textForEmbedding: string;
+  cueText: string;
+  severity: FeedbackSeverity;
+  riskLevel: RiskLevel | null;
+  embedding: number[];
+  createdAt: string;
+}
+
+export interface LiveMemoryCue {
+  chunkId: string;
+  runId: string;
+  slideNumber: number | null;
+  sourceType: RunMemorySourceType;
+  cueText: string;
+  supportingText: string;
+  severity: FeedbackSeverity;
+  riskLevel: RiskLevel | null;
+  similarityScore: number;
+  startMs: number | null;
+  endMs: number | null;
+}
+
 export interface RunSummary {
   id: string;
   projectId: string | null;
@@ -183,6 +238,8 @@ export interface RunReport {
 export interface RunDetails extends RunSummary {
   feedbacks: RunFeedback[];
   slideAnalyses: RunSlideAnalysis[];
+  artifacts: RunArtifact[];
+  transcriptSegments: RunTranscriptSegment[];
   runReport: RunReport | null;
 }
 
@@ -190,6 +247,8 @@ export interface SaveRunPayload {
   run: Omit<RunSummary, 'createdAt'>;
   feedbacks: Array<Omit<RunFeedback, 'runId'>>;
   slideAnalyses: Array<Omit<RunSlideAnalysis, 'id' | 'runId'>>;
+  artifacts?: Array<Omit<RunArtifact, 'createdAt' | 'runId'>>;
+  transcriptSegments?: Array<Omit<RunTranscriptSegment, 'runId'>>;
 }
 
 export interface RiskSegment {

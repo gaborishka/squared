@@ -23,24 +23,27 @@ function findComparisonRunFromRuns(runs: RunSummary[], run: RunDetails): RunSumm
   return null;
 }
 
-function findComparisonRun(run: RunDetails): RunSummary | null {
+async function findComparisonRun(run: RunDetails): Promise<RunSummary | null> {
   if (!run.projectId) return null;
 
-  return findComparisonRunFromRuns(listRuns(run.projectId), run);
+  return findComparisonRunFromRuns(await listRuns(run.projectId), run);
 }
 
-function getEarlierRuns(run: RunDetails): RunDetails[] {
+async function getEarlierRuns(run: RunDetails): Promise<RunDetails[]> {
   if (!run.projectId) return [];
 
-  const runs = listRuns(run.projectId);
+  const runs = await listRuns(run.projectId);
   const currentIndex = runs.findIndex((candidate) => candidate.id === run.id);
   if (currentIndex === -1) return [];
 
-  return runs
-    .slice(currentIndex + 1)
-    .filter((candidate) => candidate.mode === run.mode)
-    .map((candidate) => getRun(candidate.id))
-    .filter((candidate): candidate is RunDetails => Boolean(candidate));
+  const earlierRuns = await Promise.all(
+    runs
+      .slice(currentIndex + 1)
+      .filter((candidate) => candidate.mode === run.mode)
+      .map((candidate) => getRun(candidate.id)),
+  );
+
+  return earlierRuns.filter((candidate): candidate is RunDetails => Boolean(candidate));
 }
 
 function toVerdict(run: RunDetails): RunReport['verdict'] {
@@ -258,11 +261,11 @@ function buildHighlights(run: RunDetails): RunReportHighlight[] {
   return [...feedbackHighlights, ...recoveryHighlights].slice(0, 6);
 }
 
-export function buildRunReport(run: RunDetails): RunReport {
-  const project = run.projectId ? getProject(run.projectId) : null;
-  const comparisonRun = findComparisonRun(run);
+export async function buildRunReport(run: RunDetails): Promise<RunReport> {
+  const project = run.projectId ? await getProject(run.projectId) : null;
+  const comparisonRun = await findComparisonRun(run);
   const comparison = buildComparison(run, comparisonRun);
-  const earlierRuns = getEarlierRuns(run);
+  const earlierRuns = await getEarlierRuns(run);
   const slideCards = buildSlideCards(run, project, earlierRuns);
   const riskySlides = slideCards.filter((slide) => slide.riskLevel !== 'safe').map((slide) => slide.slideNumber);
   const minutes = run.duration > 0 ? run.duration / 60000 : 0;
@@ -280,9 +283,9 @@ export function buildRunReport(run: RunDetails): RunReport {
   };
 }
 
-export function attachRunReport(run: RunDetails): RunDetails {
+export async function attachRunReport(run: RunDetails): Promise<RunDetails> {
   return {
     ...run,
-    runReport: buildRunReport(run),
+    runReport: await buildRunReport(run),
   };
 }

@@ -10,21 +10,21 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 export const projectsRouter = Router();
 
-projectsRouter.post('/', (req, res) => {
+projectsRouter.post('/', async (req, res) => {
   const input = req.body as ProjectInput;
   if (!input.name?.trim()) {
     res.status(400).json({ error: 'Project name is required.' });
     return;
   }
-  res.status(201).json(createProject(input));
+  res.status(201).json(await createProject(input));
 });
 
-projectsRouter.get('/', (_req, res) => {
-  res.json(listProjects());
+projectsRouter.get('/', async (_req, res) => {
+  res.json(await listProjects());
 });
 
-projectsRouter.get('/:id/file', (req, res) => {
-  const project = getProject(String(req.params.id));
+projectsRouter.get('/:id/file', async (req, res) => {
+  const project = await getProject(String(req.params.id));
   if (!project?.filePath) {
     res.status(404).json({ error: 'File not found.' });
     return;
@@ -37,7 +37,7 @@ projectsRouter.get('/:id/file', (req, res) => {
 });
 
 projectsRouter.get('/:id/slides/:slideNumber/preview', async (req, res) => {
-  const project = getProject(String(req.params.id));
+  const project = await getProject(String(req.params.id));
   const slideNumber = Number(req.params.slideNumber);
 
   if (!project?.filePath || !Number.isInteger(slideNumber) || slideNumber < 1) {
@@ -72,9 +72,9 @@ projectsRouter.get('/:id/slides/:slideNumber/preview', async (req, res) => {
   });
 });
 
-projectsRouter.get('/:id', (req, res) => {
+projectsRouter.get('/:id', async (req, res) => {
   const projectId = String(req.params.id);
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
     return;
@@ -82,7 +82,7 @@ projectsRouter.get('/:id', (req, res) => {
   res.json(project);
 });
 
-projectsRouter.put('/:id', (req, res) => {
+projectsRouter.put('/:id', async (req, res) => {
   const projectId = String(req.params.id);
   const input = req.body as ProjectInput;
   if (!input.name?.trim()) {
@@ -90,7 +90,7 @@ projectsRouter.put('/:id', (req, res) => {
     return;
   }
 
-  const project = updateProject(projectId, input);
+  const project = await updateProject(projectId, input);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
     return;
@@ -98,8 +98,8 @@ projectsRouter.put('/:id', (req, res) => {
   res.json(project);
 });
 
-projectsRouter.delete('/:id', (req, res) => {
-  const deleted = deleteProject(String(req.params.id));
+projectsRouter.delete('/:id', async (req, res) => {
+  const deleted = await deleteProject(String(req.params.id));
   if (!deleted) {
     res.status(404).json({ error: 'Project not found.' });
     return;
@@ -114,7 +114,7 @@ projectsRouter.post('/:id/upload', upload.single('file'), async (req, res) => {
     return;
   }
 
-  const project = getProject(projectId);
+  const project = await getProject(projectId);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
     return;
@@ -122,7 +122,7 @@ projectsRouter.post('/:id/upload', upload.single('file'), async (req, res) => {
 
   try {
     const parsed = await parseUploadFile(projectId, req.file);
-    const updated = replaceProjectUpload(
+    const updated = await replaceProjectUpload(
       projectId,
       {
         content: parsed.content,
