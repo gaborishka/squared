@@ -120,6 +120,34 @@ export const POSTGRES_SCHEMA = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
 
+  -- Auth tables
+  CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY,
+    google_id TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    picture_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+  -- User ownership columns
+  ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+  ALTER TABLE runs ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+
+  CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+  CREATE INDEX IF NOT EXISTS idx_runs_user_id ON runs(user_id);
+
   CREATE INDEX IF NOT EXISTS idx_runs_project_created_at ON runs(project_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_feedbacks_run_id ON feedbacks(run_id);
   CREATE INDEX IF NOT EXISTS idx_slide_analyses_run_id ON run_slide_analyses(run_id);

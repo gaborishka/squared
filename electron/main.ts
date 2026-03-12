@@ -1,5 +1,6 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session } from 'electron';
 import { fork, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { registerIpc } from './ipc.js';
 import { createPillWindow } from './statusPill.js';
@@ -92,6 +93,30 @@ function migratePackagedLegacyData(paths: ReturnType<typeof getElectronPaths>): 
   if (migration.copiedDatabase || migration.copiedUploads) {
     console.log('Migrated legacy Squared desktop data', migration);
   }
+}
+
+function getPackagedHostedAppUrl(paths: ReturnType<typeof getElectronPaths>): string {
+  const envUrl = process.env.APP_URL?.trim();
+  if (envUrl) {
+    return envUrl.replace(/\/$/, '');
+  }
+
+  try {
+    const raw = fs.readFileSync(paths.runtimeConfigPath, 'utf8');
+    const parsed = JSON.parse(raw) as { hostedAppUrl?: string };
+    const configuredUrl = parsed.hostedAppUrl?.trim();
+    if (configuredUrl) {
+      return configuredUrl.replace(/\/$/, '');
+    }
+  } catch (error) {
+    console.error('Failed to read desktop runtime config', error);
+  }
+
+  dialog.showErrorBox(
+    'Squared requires a hosted app URL',
+    'APP_URL is not configured for the packaged desktop app. Rebuild the desktop bundle with APP_URL set to the hosted service URL.',
+  );
+  throw new Error('APP_URL is required for the packaged desktop app.');
 }
 
 async function ensureBundledServer(): Promise<number> {
@@ -270,7 +295,7 @@ function registerDisplayMediaHandler(): void {
 
 async function createWindows(): Promise<void> {
   const paths = getElectronPaths();
-  const serverPort = await ensureBundledServer();
+  migratePackagedLegacyData(paths);
   registerDisplayMediaHandler();
 
   mainWindow = new BrowserWindow({
@@ -313,7 +338,11 @@ async function createWindows(): Promise<void> {
   });
   ensureTray(paths);
 
-  await mainWindow.loadURL(isDev ? paths.devServerUrl : buildLocalUrl(serverPort));
+  const appUrl = isDev ? paths.devServerUrl : getPackagedHostedAppUrl(paths);
+  if (isDev) {
+    await ensureBundledServer();
+  }
+  await mainWindow.loadURL(appUrl);
 
   // Ensure dock icon stays visible on macOS
   if (process.platform === 'darwin' && app.dock) {

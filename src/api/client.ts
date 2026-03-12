@@ -12,19 +12,19 @@ import type {
   SaveRunPayload,
 } from '../types';
 
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   const envBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
   if (envBase) return envBase;
   if (typeof window === 'undefined') return 'http://127.0.0.1:3001';
   if (window.location.protocol === 'file:') return 'http://127.0.0.1:3001';
-  if (window.location.port === '3000' || window.location.port === '5173') return 'http://127.0.0.1:3001';
+  // In dev, Vite proxy forwards /api to the backend; in production, same origin
   return '';
 }
 
-const API_BASE_URL = getApiBaseUrl();
+export const API_BASE_URL = getApiBaseUrl();
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...init });
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(errorText || `Request failed with ${response.status}`);
@@ -103,4 +103,7 @@ export const api = {
   getProjectFileUrl: (id: string) => `${API_BASE_URL}/api/projects/${id}/file`,
   getProjectSlidePreviewUrl: (id: string, slideNumber: number) =>
     `${API_BASE_URL}/api/projects/${id}/slides/${slideNumber}/preview`,
+  getCurrentUser: () => requestJson<import('../types').AuthUser>('/api/auth/me'),
+  logout: () => requestJson<void>('/api/auth/logout', { method: 'POST' }),
+  getAuthBaseUrl: () => API_BASE_URL,
 };

@@ -14,6 +14,7 @@ export type AudienceCaptureStatus = 'inactive' | 'requesting' | 'active' | 'lost
 export type AudiencePriority = 'info' | 'watch' | 'critical';
 export type FeedbackSeverity = 'info' | 'warning' | 'critical';
 export type FeedbackCategory = 'pace' | 'eye_contact' | 'posture' | 'content' | 'structure' | 'filler';
+export type LiveSessionKind = 'coach' | 'delivery' | 'audience';
 export type RiskType =
   | 'pace_spike'
   | 'freeze'
@@ -89,6 +90,13 @@ export interface ProjectSlide {
   title: string;
   content: string;
   speakerNotes: string;
+}
+
+export interface LiveAuthTokenResponse {
+  token: string;
+  model: string;
+  expiresAt: string;
+  newSessionExpiresAt: string;
 }
 
 export interface ProjectSummary {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getGamePlan, getLatestGamePlan, getProject } from '../db/queries.js';
+import { getGamePlan, getLatestGamePlan, getProject, isProjectOwnedBy } from '../db/queries.js';
 import { getProjectAnalysis, readStoredRiskSegments } from '../services/analysis.js';
 import { generateGamePlan } from '../services/gameplan.js';
 import { getProjectSlideMemoryMap, getSlideMemory } from '../services/runMemory.js';
@@ -7,6 +7,10 @@ import { getProjectSlideMemoryMap, getSlideMemory } from '../services/runMemory.
 export const analysesRouter = Router();
 
 analysesRouter.get('/projects/:id/analysis', async (req, res) => {
+  if (!(await isProjectOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const analysis = await getProjectAnalysis(req.params.id);
   if (!analysis) {
     res.status(404).json({ error: 'Project not found.' });
@@ -16,6 +20,10 @@ analysesRouter.get('/projects/:id/analysis', async (req, res) => {
 });
 
 analysesRouter.get('/projects/:id/risks', async (req, res) => {
+  if (!(await isProjectOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const project = await getProject(req.params.id);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
@@ -25,6 +33,10 @@ analysesRouter.get('/projects/:id/risks', async (req, res) => {
 });
 
 analysesRouter.get('/projects/:id/memory', async (req, res) => {
+  if (!(await isProjectOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const project = await getProject(req.params.id);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
@@ -42,6 +54,10 @@ analysesRouter.get('/projects/:id/memory', async (req, res) => {
 });
 
 analysesRouter.post('/projects/:id/gameplan', async (req, res) => {
+  if (!(await isProjectOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const plan = await generateGamePlan(req.params.id);
   if (!plan) {
     res.status(404).json({ error: 'Project not found.' });
@@ -56,10 +72,18 @@ analysesRouter.get('/gameplans/:id', async (req, res) => {
     res.status(404).json({ error: 'Game plan not found.' });
     return;
   }
+  if (!(await isProjectOwnedBy(plan.projectId, req.user!.id))) {
+    res.status(404).json({ error: 'Game plan not found.' });
+    return;
+  }
   res.json(plan);
 });
 
 analysesRouter.get('/projects/:id/gameplan/latest', async (req, res) => {
+  if (!(await isProjectOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const plan = await getLatestGamePlan(req.params.id);
   if (!plan) {
     res.status(404).json({ error: 'Game plan not found.' });

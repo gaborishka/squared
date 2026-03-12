@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { Router } from 'express';
 import multer from 'multer';
 import type { ProjectInput } from '../../shared/types.js';
-import { createProject, deleteProject, getProject, listProjects, replaceProjectUpload, updateProject } from '../db/queries.js';
+import { createProject, deleteProject, getProject, isProjectOwnedBy, listProjects, replaceProjectUpload, updateProject } from '../db/queries.js';
 import { parseUploadFile } from '../services/parsers.js';
 import { createPptxSlidePreviews, getSlidePreviewPath } from '../services/slidePreviews.js';
 
@@ -16,14 +16,18 @@ projectsRouter.post('/', async (req, res) => {
     res.status(400).json({ error: 'Project name is required.' });
     return;
   }
-  res.status(201).json(await createProject(input));
+  res.status(201).json(await createProject(input, req.user!.id));
 });
 
-projectsRouter.get('/', async (_req, res) => {
-  res.json(await listProjects());
+projectsRouter.get('/', async (req, res) => {
+  res.json(await listProjects(req.user!.id));
 });
 
 projectsRouter.get('/:id/file', async (req, res) => {
+  if (!(await isProjectOwnedBy(String(req.params.id), req.user!.id))) {
+    res.status(404).json({ error: 'File not found.' });
+    return;
+  }
   const project = await getProject(String(req.params.id));
   if (!project?.filePath) {
     res.status(404).json({ error: 'File not found.' });
@@ -37,6 +41,10 @@ projectsRouter.get('/:id/file', async (req, res) => {
 });
 
 projectsRouter.get('/:id/slides/:slideNumber/preview', async (req, res) => {
+  if (!(await isProjectOwnedBy(String(req.params.id), req.user!.id))) {
+    res.status(404).json({ error: 'Preview not found.' });
+    return;
+  }
   const project = await getProject(String(req.params.id));
   const slideNumber = Number(req.params.slideNumber);
 
@@ -74,6 +82,10 @@ projectsRouter.get('/:id/slides/:slideNumber/preview', async (req, res) => {
 
 projectsRouter.get('/:id', async (req, res) => {
   const projectId = String(req.params.id);
+  if (!(await isProjectOwnedBy(projectId, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const project = await getProject(projectId);
   if (!project) {
     res.status(404).json({ error: 'Project not found.' });
@@ -84,6 +96,10 @@ projectsRouter.get('/:id', async (req, res) => {
 
 projectsRouter.put('/:id', async (req, res) => {
   const projectId = String(req.params.id);
+  if (!(await isProjectOwnedBy(projectId, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const input = req.body as ProjectInput;
   if (!input.name?.trim()) {
     res.status(400).json({ error: 'Project name is required.' });
@@ -99,6 +115,10 @@ projectsRouter.put('/:id', async (req, res) => {
 });
 
 projectsRouter.delete('/:id', async (req, res) => {
+  if (!(await isProjectOwnedBy(String(req.params.id), req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   const deleted = await deleteProject(String(req.params.id));
   if (!deleted) {
     res.status(404).json({ error: 'Project not found.' });
@@ -109,6 +129,10 @@ projectsRouter.delete('/:id', async (req, res) => {
 
 projectsRouter.post('/:id/upload', upload.single('file'), async (req, res) => {
   const projectId = String(req.params.id);
+  if (!(await isProjectOwnedBy(projectId, req.user!.id))) {
+    res.status(404).json({ error: 'Project not found.' });
+    return;
+  }
   if (!req.file) {
     res.status(400).json({ error: 'File is required.' });
     return;

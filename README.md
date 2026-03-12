@@ -1,85 +1,94 @@
-# Squared v0.1
+# Squared
 
-An AI app for real-time public speaking coaching powered by Gemini Live API.
+Squared is an AI speech-coaching app with live rehearsal feedback, presentation HUD overlays, saved run history, and project memory grounded by Gemini.
 
-## What's Included in v0.1
-
-- Two operating modes: `Rehearsal Mode` and `Presentation Mode`.
-- Real-time analysis of speaking and delivery using camera and microphone input.
-- Live visual indicators of presentation quality.
-- Session insights panel with scores, filler-word tracking, and feedback history.
-
-## Feature Overview
-
-### 1. Rehearsal Mode
-
-- The AI coach can provide short voice feedback during practice.
-- Live analysis includes:
-  - speaking pace (`pace`)
-  - eye contact (`eye contact`)
-  - posture (`posture`)
-  - filler words (`filler words`)
-  - volume (`volume level`)
-  - confidence (`confidence score`)
-  - overall performance (`overall score`)
-- Feedback timeline with timestamps for the active session.
-
-### 2. Presentation Mode
-
-- No voice interruptions from AI (silent coach).
-- Guidance and metrics are shown through a HUD overlay and side panel.
-- Suitable for live presentations and video calls where discreet visual coaching is needed.
-
-### 3. Session Insights
-
-- Overall score ring.
-- `Volume` and `Confidence` metric cards.
-- Filler-word visualization with per-word breakdown.
-- Coach feedback history for the active session.
-
-## How to Run Locally
+## Local development
 
 ### Prerequisites
 
-- `Node.js` 18+ (LTS recommended)
+- `Node.js` 22+
 - `npm`
-- Access to a Gemini API key
-- A browser with camera and microphone permissions
+- `Docker`
+- `GEMINI_API_KEY`
+- Google OAuth client credentials for hosted auth flows
 
-### Setup Steps
+### Setup
 
 1. Install dependencies:
    ```bash
    npm install
    ```
-2. Create a local env file:
+2. Copy env defaults:
    ```bash
-   cp .env.example .env
+   cp .env.example .env.local
    ```
-3. Set `GEMINI_API_KEY` in `.env`.
-4. Start the dev server:
+3. Start local Postgres:
+   ```bash
+   npm run db:up
+   ```
+4. Start the web app and API:
    ```bash
    npm run dev
    ```
-5. Open the app in your browser: `http://localhost:3000`
+5. Open [http://localhost:5173](http://localhost:5173).
 
-### Useful Commands
+### Desktop development
 
-- `npm run dev` - run local dev server.
-- `npm run build` - create production build.
-- `npm run preview` - preview production build locally.
-- `npm run lint` - run TypeScript checks (`tsc --noEmit`).
+Use:
 
-## Permissions
+```bash
+npm run dev:desktop
+```
 
-- Both modes require:
-  - `camera`
-  - `microphone`
+In development the Electron shell still talks to the local API server. In packaged production builds it loads the hosted `APP_URL` directly.
 
-## Image Placeholders (format: `[description]`)
+## Deployment
 
-[Home screen]
-[Rehearsal Mode - session start]
-[Rehearsal Mode - active session with feedback]
-[Presentation Mode - HUD overlay]
-[Session Insights - metrics panel]
+Deployment is driven by Terraform plus shell scripts:
+
+- `infra-bootstrap/` creates the remote GCS bucket for Terraform state.
+- `infra/` manages Artifact Registry, Cloud Run, Cloud SQL, Secret Manager wiring, and IAM.
+- `scripts/bootstrap-secrets.sh` publishes runtime secrets and manages the Cloud SQL app user password.
+- `scripts/rotate-db-password.sh` rotates the Cloud SQL password and updates Secret Manager.
+
+Run:
+
+```bash
+./scripts/deploy.sh --project=YOUR_GCP_PROJECT --app-url=https://YOUR_SERVICE_URL
+```
+
+The deploy flow:
+
+1. enables required GCP APIs
+2. ensures the Terraform state bucket exists
+3. initializes Terraform with the GCS backend
+4. provisions prereqs (Artifact Registry, Cloud SQL, secret containers, IAM)
+5. builds and pushes the container image
+6. publishes secret versions to Secret Manager
+7. applies the full Cloud Run deployment
+
+## Environment variables
+
+Required:
+
+- `GEMINI_API_KEY`
+- `APP_URL`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+
+Local development also uses:
+
+- `DATABASE_URL`
+- `PGSSLMODE`
+
+Optional:
+
+- `TF_STATE_BUCKET`
+- `TF_STATE_BUCKET_LOCATION`
+- `TF_STATE_PREFIX`
+
+## Notes
+
+- Cloud Run reads runtime secrets from Secret Manager.
+- Cloud SQL uses private connectivity through Serverless VPC Access; desktop production goes through the hosted app instead of any direct DB path.
+- Browser Live sessions now use short-lived server-minted Gemini auth tokens instead of exposing the long-lived API key in the frontend bundle.

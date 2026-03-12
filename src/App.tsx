@@ -1,11 +1,15 @@
 import { useState } from 'react';
+import { LoaderCircle } from 'lucide-react';
 import { Home } from './components/Home';
+import { LandingPage } from './components/LandingPage';
 import { RehearsalMode } from './components/RehearsalMode';
 import { PresentationMode } from './components/PresentationMode';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import type { GamePlan, ProjectDetails } from './types';
 
-export default function App() {
+function AppContent() {
+  const { user, isLoading } = useAuth();
   const [mode, setMode] = useState<'home' | 'rehearsal' | 'presentation'>('home');
   const [refreshToken, setRefreshToken] = useState(0);
   const [activeProject, setActiveProject] = useState<ProjectDetails | null>(null);
@@ -15,6 +19,18 @@ export default function App() {
     setMode('home');
     setRefreshToken((current) => current + 1);
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-zinc-950 flex items-center justify-center">
+        <LoaderCircle className="w-8 h-8 animate-spin text-zinc-500" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LandingPage />;
+  }
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 font-sans selection:bg-indigo-500/30">
@@ -53,5 +69,13 @@ export default function App() {
         </ErrorBoundary>
       )}
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

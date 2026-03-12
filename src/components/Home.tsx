@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   AlertCircle,
+  ArrowRight,
+  Brain,
   ChevronDown,
   ChevronRight,
   Clock3,
@@ -12,8 +14,8 @@ import {
   Plus,
   Presentation,
   Trash2,
-  TrendingUp,
   Target,
+  TrendingUp,
   History,
   LogOut,
 } from 'lucide-react';
@@ -25,6 +27,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { GamePlanView } from './GamePlanView';
 import { ProjectSetup } from './ProjectSetup';
 import { RunAnalysis } from './RunAnalysis';
+import { ParticleBackground } from './ParticleBackground';
 
 interface HomeProps {
   refreshToken: number;
@@ -204,10 +207,10 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
     <>
       <div className="h-screen flex flex-col overflow-hidden bg-zinc-950">
         {/* ──── Header ──── */}
-        <header className="relative z-50 flex items-center justify-between px-6 lg:px-10 py-4 border-b border-zinc-800/40 bg-zinc-950/80 backdrop-blur-md shrink-0">
-          <div className="flex items-center gap-2.5">
-            <img src={squaredIcon} alt="Squared" className="h-9 w-9" />
-            <span className="text-xl font-bold tracking-tight text-zinc-100">squared</span>
+        <header className="relative z-50 flex items-center justify-between px-6 lg:px-10 py-5 border-b border-zinc-800/40 bg-zinc-950/80 backdrop-blur-md shrink-0">
+          <div className="flex items-center gap-4">
+            <img src={squaredIcon} alt="Squared" className="h-14 w-14" />
+            <span className="text-[2rem] font-bold tracking-tight text-zinc-100">squared</span>
           </div>
 
           <div className="flex items-center gap-3">
@@ -279,20 +282,20 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
             </button>
 
             {/* User Menu */}
-            <div className="flex items-center gap-2 pl-3 border-l border-zinc-800/50">
+            <div className="flex items-center gap-2.5 pl-4 border-l border-zinc-800/50">
               {user?.pictureUrl ? (
-                <img src={user.pictureUrl} alt="" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
+                <img src={user.pictureUrl} alt="" className="w-10 h-10 rounded-full ring-1 ring-zinc-700/60" referrerPolicy="no-referrer" />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-400">
+                <div className="w-10 h-10 rounded-full bg-zinc-800 flex items-center justify-center text-base font-medium text-zinc-400 ring-1 ring-zinc-700/60">
                   {user?.name?.[0] ?? user?.email?.[0] ?? '?'}
                 </div>
               )}
               <button
                 onClick={() => void logout()}
-                className="text-zinc-500 hover:text-zinc-300 transition-colors p-1.5 rounded-lg hover:bg-zinc-800/40"
+                className="text-zinc-500 hover:text-zinc-300 transition-colors p-2 rounded-lg hover:bg-zinc-800/40"
                 title="Sign out"
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -300,11 +303,14 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
 
         {/* ──── Main Content ──── */}
         <main className="flex-1 min-h-0 overflow-y-auto relative">
-          {/* Ambient glow */}
-          <div className="pointer-events-none fixed top-[8%] left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-indigo-500/[0.03] rounded-full blur-[160px]" />
-          <div className="pointer-events-none fixed top-[25%] left-[30%] w-[400px] h-[400px] bg-emerald-500/[0.02] rounded-full blur-[120px]" />
+          {/* Particle network background */}
+          {!selectedProject && !isLoading && (
+            <div className="absolute inset-0">
+              <ParticleBackground className="absolute inset-0 w-full h-full" />
+            </div>
+          )}
 
-          <div className="max-w-6xl mx-auto px-6 lg:px-10 py-8 lg:py-12 relative z-10">
+          <div className="max-w-7xl mx-auto px-6 lg:px-10 py-8 lg:py-12 min-h-full relative z-10 flex flex-col">
             {/* Error Banner */}
             {error && (
               <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-5 py-3.5 text-sm text-red-300 flex items-center gap-3 mb-8">
@@ -316,36 +322,75 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
 
             {isLoading ? (
               /* ──── Loading ──── */
-              <div className="text-center py-32">
-                <LoaderCircle className="w-8 h-8 animate-spin mx-auto text-zinc-500" />
-                <p className="text-base text-zinc-500 mt-4">Loading projects...</p>
+              <div className="flex-1 flex items-center justify-center text-center py-32">
+                <div>
+                  <LoaderCircle className="w-10 h-10 animate-spin mx-auto text-zinc-500" />
+                  <p className="text-lg text-zinc-500 mt-4">Loading projects...</p>
+                </div>
               </div>
             ) : !selectedProject ? (
               /* ──── Empty State ──── */
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.6, ease: [0.25, 0.46, 0.45, 0.94] }}
-                className="text-center py-24 max-w-lg mx-auto"
-              >
-                <div className="inline-flex items-center justify-center w-24 h-24 rounded-3xl bg-gradient-to-b from-zinc-800/80 to-zinc-900 border border-zinc-700/50 mb-10 shadow-xl shadow-indigo-500/5">
-                  <Mic className="w-10 h-10 text-indigo-400" />
-                </div>
-                <h1 className="text-4xl lg:text-5xl font-bold text-zinc-50 tracking-tight">Welcome to Squared</h1>
-                <p className="text-lg text-zinc-400 mt-4 leading-relaxed">
-                  Upload your deck and start rehearsing with AI-powered speech coaching.
-                </p>
-                <button
-                  onClick={() => {
-                    setSetupProject(null);
-                    setSetupOpen(true);
-                  }}
-                  className="mt-12 inline-flex items-center gap-2.5 rounded-2xl bg-indigo-500 px-8 py-4 text-lg font-semibold text-white hover:bg-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/35 hover:scale-[1.02] active:scale-[0.98]"
+              <div className="flex-1 flex items-center justify-center">
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.7, ease: [0.25, 0.46, 0.45, 0.94] }}
+                  className="text-center max-w-3xl w-full"
                 >
-                  <Plus className="w-5 h-5" />
-                  Create your first project
-                </button>
-              </motion.div>
+                  <h1 className="text-6xl lg:text-8xl font-extrabold tracking-tight leading-[1.05]">
+                    <span className="bg-gradient-to-b from-white to-zinc-400 bg-clip-text text-transparent">
+                      Nail every
+                    </span>
+                    <br />
+                    <span className="bg-[linear-gradient(135deg,#818cf8_0%,#a78bfa_40%,#34d399_100%)] bg-clip-text text-transparent">
+                      presentation
+                    </span>
+                  </h1>
+
+                  <p className="text-lg text-zinc-500 mt-4 leading-relaxed">
+                    Your AI presentation navigator — from first rehearsal to final stage.
+                  </p>
+
+                  {/* Feature strip */}
+                  <div className="mt-8 flex items-stretch rounded-2xl border border-zinc-800/60 bg-zinc-900/40 backdrop-blur-sm overflow-hidden">
+                    <div className="flex-1 flex items-center gap-3 px-5 py-4 group/cell cursor-default hover:bg-indigo-500/[0.08] transition-all duration-300">
+                      <Mic className="w-4.5 h-4.5 text-indigo-400 shrink-0 group-hover/cell:drop-shadow-[0_0_6px_rgba(129,140,248,0.6)] transition-all duration-300" />
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-zinc-200 group-hover/cell:text-indigo-200 transition-colors duration-300">Rehearse</div>
+                        <div className="text-xs text-zinc-500 group-hover/cell:text-zinc-400 transition-colors duration-300">Live voice & vision coaching</div>
+                      </div>
+                    </div>
+                    <div className="w-px bg-zinc-800/60" />
+                    <div className="flex-1 flex items-center gap-3 px-5 py-4 group/cell cursor-default hover:bg-emerald-500/[0.08] transition-all duration-300">
+                      <Presentation className="w-4.5 h-4.5 text-emerald-400 shrink-0 group-hover/cell:drop-shadow-[0_0_6px_rgba(52,211,153,0.6)] transition-all duration-300" />
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-zinc-200 group-hover/cell:text-emerald-200 transition-colors duration-300">Present</div>
+                        <div className="text-xs text-zinc-500 group-hover/cell:text-zinc-400 transition-colors duration-300">AI game plan & silent HUD</div>
+                      </div>
+                    </div>
+                    <div className="w-px bg-zinc-800/60" />
+                    <div className="flex-1 flex items-center gap-3 px-5 py-4 group/cell cursor-default hover:bg-violet-500/[0.08] transition-all duration-300">
+                      <Brain className="w-4.5 h-4.5 text-violet-400 shrink-0 group-hover/cell:drop-shadow-[0_0_6px_rgba(167,139,250,0.6)] transition-all duration-300" />
+                      <div className="text-left">
+                        <div className="text-sm font-medium text-zinc-200 group-hover/cell:text-violet-200 transition-colors duration-300">Improve</div>
+                        <div className="text-xs text-zinc-500 group-hover/cell:text-zinc-400 transition-colors duration-300">Learns from every session</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setSetupProject(null);
+                      setSetupOpen(true);
+                    }}
+                    className="group mt-8 inline-flex items-center gap-3 rounded-2xl bg-indigo-500 px-7 py-3.5 text-[17px] font-semibold text-white hover:bg-indigo-400 transition-all duration-200 shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/35 hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <Plus className="w-5 h-5" />
+                    Create your first project
+                    <ArrowRight className="w-4 h-4 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200" />
+                  </button>
+                </motion.div>
+              </div>
             ) : (
               /* ──── Active Project — Two Column Layout ──── */
               <motion.div

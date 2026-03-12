@@ -22,18 +22,20 @@ No test framework is configured. No ESLint or Prettier.
 
 **Quick deploy:**
 ```bash
-./scripts/deploy.sh --project=YOUR_GCP_PROJECT
+./scripts/deploy.sh --project=YOUR_GCP_PROJECT --app-url=https://YOUR_SERVICE_URL
 ```
 
-The script reads `GEMINI_API_KEY` from `.env` or `.env.local`, builds a Docker image, pushes to Artifact Registry, and deploys via Terraform to Cloud Run.
+The deploy flow now:
+- bootstraps a remote GCS backend via `infra-bootstrap/`
+- provisions private-connectivity Cloud SQL, Serverless VPC Access, Artifact Registry, Secret Manager containers, monitoring, and IAM via `infra/`
+- pushes runtime secret versions with `scripts/bootstrap-secrets.sh`
+- deploys Cloud Run with Secret Manager references instead of plaintext Terraform outputs
 
-**Infrastructure:** Terraform IaC in `infra/` — manages Artifact Registry, Cloud Run service, and IAM. SQLite is ephemeral on Cloud Run (data resets on container restart).
-
-**Current deployment:** https://squared-j2gx3ygtta-uc.a.run.app (project: `agile-stratum-486012-v3`, region: `us-central1`)
+**Infrastructure:** `infra/` manages Artifact Registry, Cloud Run, Cloud SQL, Secret Manager wiring, and IAM. `infra-bootstrap/` only creates the Terraform state bucket.
 
 ## Environment Variables
 
-Copy `.env.example` to `.env.local`. Required: `GEMINI_API_KEY`. Optional: `APP_URL`, `DISABLE_HMR` (used in AI Studio deployments).
+Copy `.env.example` to `.env.local`. Required: `GEMINI_API_KEY`, `APP_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`. Local development also needs `DATABASE_URL`. Browser Live sessions no longer read the Gemini key directly; the server mints ephemeral Live tokens for authenticated clients.
 
 ## Architecture
 

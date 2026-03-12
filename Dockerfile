@@ -7,8 +7,6 @@ COPY package.json package-lock.json ./
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 RUN npm ci
 
-ARG GEMINI_API_KEY
-
 COPY . .
 
 RUN npm run build:web && npm run build:server

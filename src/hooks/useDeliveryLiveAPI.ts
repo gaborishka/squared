@@ -3,7 +3,6 @@ import {
   ActivityHandling,
   Behavior,
   FunctionResponseScheduling,
-  GoogleGenAI,
   LiveServerMessage,
   Modality,
   TurnCoverage,
@@ -18,6 +17,7 @@ import {
   PoseLandmarkerResult,
 } from '@mediapipe/tasks-vision';
 import type { DeliveryAgentUpdate, SlideAnalysisToolPayload } from '../types';
+import { createBrowserLiveClient } from '../lib/liveClient';
 
 const TRANSCRIPT_PACE_WINDOW_MS = 20000;
 const DERIVED_INDICATOR_TICK_MS = 500;
@@ -456,9 +456,7 @@ export function useDeliveryLiveAPI({
     resetLocalVisualState();
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error('API Key is missing');
-      const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1alpha' } });
+      const ai = await createBrowserLiveClient('delivery');
 
       let stream: MediaStream;
       try {

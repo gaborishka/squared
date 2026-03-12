@@ -344,7 +344,7 @@ async function getProjectSummaryRow(id: string, client?: Pick<PoolClient, 'query
 
 export async function listProjects(userId: string): Promise<ProjectSummary[]> {
   const rows = await queryRows<ProjectRow>(
-    `${PROJECT_SELECT_SQL} WHERE p.user_id = $1 OR p.user_id IS NULL ORDER BY p.updated_at DESC`,
+    `${PROJECT_SELECT_SQL} WHERE p.user_id = $1 ORDER BY p.updated_at DESC`,
     [userId],
   );
   return rows.map(mapProjectSummary);
@@ -353,13 +353,19 @@ export async function listProjects(userId: string): Promise<ProjectSummary[]> {
 export async function isProjectOwnedBy(projectId: string, userId: string): Promise<boolean> {
   const row = await queryRow<{ user_id: string | null }>('SELECT user_id FROM projects WHERE id = $1', [projectId]);
   if (!row) return false;
-  return row.user_id === null || row.user_id === userId;
+  return row.user_id === userId;
 }
 
 export async function isRunOwnedBy(runId: string, userId: string): Promise<boolean> {
   const row = await queryRow<{ user_id: string | null }>('SELECT user_id FROM runs WHERE id = $1', [runId]);
   if (!row) return false;
-  return row.user_id === null || row.user_id === userId;
+  return row.user_id === userId;
+}
+
+/** Claim orphan projects/runs (created before auth) for a user. Call on login. */
+export async function claimOrphanRecords(userId: string): Promise<void> {
+  await queryRows(`UPDATE projects SET user_id = $1 WHERE user_id IS NULL`, [userId]);
+  await queryRows(`UPDATE runs SET user_id = $1 WHERE user_id IS NULL`, [userId]);
 }
 
 export async function getProject(id: string): Promise<ProjectDetails | null> {

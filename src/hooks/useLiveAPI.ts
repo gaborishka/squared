@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type, ActivityHandling, TurnCoverage, Behavior, FunctionResponseScheduling } from '@google/genai';
 import { FilesetResolver, FaceLandmarker, FaceLandmarkerResult, NormalizedLandmark, PoseLandmarker, PoseLandmarkerResult } from '@mediapipe/tasks-vision';
 import { IndicatorUpdate, SlideAnalysisToolPayload } from '../types';
+import { createBrowserLiveClient } from '../lib/liveClient';
 
 const TRANSCRIPT_PACE_WINDOW_MS = 20000;
 const DERIVED_INDICATOR_TICK_MS = 500;
@@ -628,7 +629,7 @@ export function useLiveAPI({
 
   const doReconnect = useCallback(async () => {
     if (isReconnectingRef.current) return;
-    if (!aiRef.current || !connectConfigRef.current) return;
+    if (!connectConfigRef.current) return;
 
     isReconnectingRef.current = true;
     setIsReconnecting(true);
@@ -636,7 +637,6 @@ export function useLiveAPI({
 
     closeSession();
 
-    const ai = aiRef.current;
     const storedConfig = connectConfigRef.current;
     const playbackContext = playbackContextRef.current;
 
@@ -657,6 +657,8 @@ export function useLiveAPI({
     };
 
     try {
+      const ai = await createBrowserLiveClient('coach');
+      aiRef.current = ai;
       const sessionPromise = ai.live.connect({
         model: storedConfig.model,
         config,
@@ -744,9 +746,7 @@ export function useLiveAPI({
     resetDerivedIndicatorsState();
     resetLocalVisualState();
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error("API Key is missing");
-      const ai = new GoogleGenAI({ apiKey, httpOptions: { "apiVersion": "v1alpha" } });
+      const ai = await createBrowserLiveClient('coach');
       aiRef.current = ai;
 
       let stream: MediaStream;

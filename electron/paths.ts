@@ -10,6 +10,7 @@ export interface ElectronPaths {
   frontendDistDir: string;
   devServerUrl: string;
   serverEntry: string;
+  runtimeConfigPath: string;
   statusPillHtmlPath: string;
   subtitlesHtmlPath: string;
   sourcePickerHtmlPath: string;
@@ -32,6 +33,7 @@ export function getElectronPaths(): ElectronPaths {
     serverEntry: app.isPackaged
       ? path.resolve(appRoot, 'dist-server/server/index.js')
       : path.resolve(resourcesRoot, 'dist-server/server/index.js'),
+    runtimeConfigPath: path.resolve(resourcesRoot, 'electron/runtime-config.json'),
     statusPillHtmlPath: path.resolve(resourcesRoot, 'electron/statusPill.html'),
     subtitlesHtmlPath: path.resolve(resourcesRoot, 'electron/subtitles.html'),
     sourcePickerHtmlPath: path.resolve(resourcesRoot, 'electron/sourcePicker.html'),

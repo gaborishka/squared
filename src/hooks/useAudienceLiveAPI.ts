@@ -3,13 +3,13 @@ import {
   ActivityHandling,
   Behavior,
   FunctionResponseScheduling,
-  GoogleGenAI,
   LiveServerMessage,
   Modality,
   TurnCoverage,
   Type,
 } from '@google/genai';
 import type { AudienceAgentUpdate } from '../types';
+import { createBrowserLiveClient } from '../lib/liveClient';
 
 const AUDIENCE_FRAME_INTERVAL_MS = 1200;
 const AUDIENCE_LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
@@ -137,9 +137,7 @@ export function useAudienceLiveAPI({
     });
 
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) throw new Error('API Key is missing');
-      const ai = new GoogleGenAI({ apiKey, httpOptions: { apiVersion: 'v1alpha' } });
+      const ai = await createBrowserLiveClient('audience');
 
       const sourceLabel = displayStream.getVideoTracks()[0]?.label ?? '';
       displayStreamRef.current = displayStream;

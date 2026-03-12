@@ -5,7 +5,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import type { RunArtifact, SaveRunPayload } from '../../shared/types.js';
 import { getRunArtifactsDir } from '../config/paths.js';
-import { getRun, listRuns, saveRun } from '../db/queries.js';
+import { getRun, isRunOwnedBy, listRuns, saveRun } from '../db/queries.js';
 import { indexRunMemory } from '../services/runMemory.js';
 import { attachRunReport } from '../services/runReport.js';
 
@@ -32,6 +32,10 @@ runsRouter.post('/artifacts', upload.single('file'), async (req, res) => {
   const kind = typeof req.body.kind === 'string' ? req.body.kind.trim() : '';
   if (!runId || !req.file || (kind !== 'full_recording' && kind !== 'derived_clip')) {
     res.status(400).json({ error: 'Invalid artifact payload.' });
+    return;
+  }
+  if (!(await isRunOwnedBy(runId, req.user!.id))) {
+    res.status(404).json({ error: 'Run not found.' });
     return;
   }
 
@@ -77,7 +81,7 @@ runsRouter.post('/', async (req, res) => {
     return;
   }
 
-  const saved = await attachRunReport(await saveRun(payload));
+  const saved = await attachRunReport(await saveRun(payload, req.user!.id));
   res.status(201).json(saved);
 
   if (payload.run.projectId) {
@@ -89,10 +93,14 @@ runsRouter.post('/', async (req, res) => {
 
 runsRouter.get('/', async (req, res) => {
   const projectId = typeof req.query.project_id === 'string' ? req.query.project_id : undefined;
-  res.json(await listRuns(projectId));
+  res.json(await listRuns(projectId, req.user!.id));
 });
 
 runsRouter.get('/:id', async (req, res) => {
+  if (!(await isRunOwnedBy(req.params.id, req.user!.id))) {
+    res.status(404).json({ error: 'Run not found.' });
+    return;
+  }
   const run = await getRun(req.params.id);
   if (!run) {
     res.status(404).json({ error: 'Run not found.' });
