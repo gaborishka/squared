@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { GamePlan, InterventionPolicy, ProjectDetails, RiskLevel, RiskSegment, RunSummary } from '../../shared/types.js';
 import { getProject, listRuns, saveGamePlan } from '../db/queries.js';
 import { refreshRiskSegments } from './analysis.js';
+import { generateQAShield } from './qaShield.js';
 
 function calculateTrend(scores: number[]): GamePlan['overview']['trend'] {
   if (scores.length < 2) return 'stable';
@@ -85,6 +86,12 @@ export async function generateGamePlan(projectId: string): Promise<GamePlan | nu
     .filter((score): score is number => typeof score === 'number');
   const segments = await refreshRiskSegments(projectId);
 
+  // Start Q&A Shield generation early so it runs in parallel with slide assembly
+  const qaShieldPromise = generateQAShield(project, segments).catch((error) => {
+    console.warn('[gameplan] Q&A Shield generation failed, continuing without it:', error);
+    return [] as Awaited<ReturnType<typeof generateQAShield>>;
+  });
+
   const slideSegments = slides.map((slide) => {
     const relatedSegments = segments.filter((segment) => segment.slideNumber === slide.slideNumber);
     const riskLevel = riskLevelForSlide(relatedSegments);
@@ -119,6 +126,9 @@ export async function generateGamePlan(projectId: string): Promise<GamePlan | nu
     .slice(0, 5)
     .map((segment) => segment.slideNumber);
 
+  // Await the Q&A Shield promise that was started earlier
+  const qaShieldResult = await qaShieldPromise;
+
   const plan: GamePlan = {
     id: crypto.randomUUID(),
     projectId,
@@ -135,6 +145,7 @@ export async function generateGamePlan(projectId: string): Promise<GamePlan | nu
       prioritySlides,
     },
     timingStrategy: buildTimingStrategy(slides.length, rehearsalRuns, prioritySlides),
+    ...(qaShieldResult.length > 0 ? { qaShield: qaShieldResult } : {}),
   };
 
   return saveGamePlan(plan);

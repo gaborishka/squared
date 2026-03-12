@@ -1,3 +1,10 @@
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string | null;
+  pictureUrl: string | null;
+}
+
 export type SessionMode = 'rehearsal' | 'presentation';
 export type ProjectFileType = 'pptx' | 'pdf' | 'text' | 'md';
 export type RiskLevel = 'safe' | 'watch' | 'fragile';
@@ -263,6 +270,15 @@ export interface RiskSegment {
   notes: string;
 }
 
+export interface QAQuestion {
+  id: string;
+  slideNumber: number | null;
+  question: string;
+  suggestedAnswer: string;
+  difficulty: 'easy' | 'medium' | 'hard';
+  source: 'content_gap' | 'weak_spot' | 'controversial' | 'technical' | 'clarification';
+}
+
 export interface GamePlanSegment {
   slideNumber: number;
   slideTitle: string;
@@ -292,6 +308,7 @@ export interface GamePlan {
     totalTargetMinutes: number;
     perSlideTargets: Record<number, number>;
   };
+  qaShield?: QAQuestion[];
 }
 
 export interface ProjectAnalysisSlideSummary {

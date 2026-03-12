@@ -1,6 +1,7 @@
-import { AlertTriangle, Clock3, Crosshair, Presentation, Shield, Sparkles, TrendingDown, TrendingUp, X, Zap } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Clock3, Crosshair, HelpCircle, MessageCircleQuestion, Presentation, Shield, Sparkles, TrendingDown, TrendingUp, X, Zap } from 'lucide-react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
-import type { GamePlan, GamePlanSegment, ProjectDetails } from '../types';
+import type { GamePlan, GamePlanSegment, ProjectDetails, QAQuestion } from '../types';
 
 interface GamePlanViewProps {
   project: ProjectDetails;
@@ -45,9 +46,27 @@ function hasContent(segment: GamePlanSegment) {
   return segment.knownIssues.length > 0 || segment.preparedCues.length > 0 || segment.recoveryPhrases.length > 0;
 }
 
+function difficultyStyle(difficulty: QAQuestion['difficulty']) {
+  if (difficulty === 'hard') return 'text-red-400 bg-red-500/10';
+  if (difficulty === 'medium') return 'text-amber-400 bg-amber-500/10';
+  return 'text-emerald-400 bg-emerald-500/10';
+}
+
+function sourceLabel(source: QAQuestion['source']) {
+  const labels: Record<QAQuestion['source'], string> = {
+    content_gap: 'Content gap',
+    weak_spot: 'Weak spot',
+    controversial: 'Bold claim',
+    technical: 'Technical',
+    clarification: 'Clarification',
+  };
+  return labels[source] ?? source;
+}
+
 export function GamePlanView({ project, plan, isGenerating, onClose, onStartPresentation }: GamePlanViewProps) {
   const TrendIcon = plan ? trendIcon[plan.overview.trend] : Sparkles;
   const prioritySet = new Set(plan?.attentionBudget.prioritySlides ?? []);
+  const [expandedQA, setExpandedQA] = useState<string | null>(null);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm overflow-y-auto">
@@ -217,6 +236,61 @@ export function GamePlanView({ project, plan, isGenerating, onClose, onStartPres
                   })}
                 </div>
               </div>
+
+              {/* Q&A Shield */}
+              {plan.qaShield && plan.qaShield.length > 0 && (
+                <div>
+                  <h3 className="text-xs font-medium text-zinc-500 uppercase tracking-widest mb-4">
+                    <span className="inline-flex items-center gap-1.5">
+                      <MessageCircleQuestion className="w-3.5 h-3.5 text-violet-400" />
+                      Q&A Shield
+                    </span>
+                    <span className="text-zinc-600 ml-2 normal-case tracking-normal">{plan.qaShield.length} predicted questions</span>
+                  </h3>
+
+                  <div className="space-y-2">
+                    {plan.qaShield.map((qa) => {
+                      const isExpanded = expandedQA === qa.id;
+                      return (
+                        <div
+                          key={qa.id}
+                          className="rounded-xl border border-zinc-800/50 bg-zinc-900/40 transition-colors hover:border-zinc-700/50"
+                        >
+                          <button
+                            onClick={() => setExpandedQA(isExpanded ? null : qa.id)}
+                            className="w-full flex items-start gap-3 px-4 py-3 text-left"
+                          >
+                            <HelpCircle className="w-4 h-4 text-violet-400 mt-0.5 shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-zinc-200 leading-relaxed">{qa.question}</p>
+                              <div className="flex items-center gap-2 mt-1.5">
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-md ${difficultyStyle(qa.difficulty)}`}>
+                                  {qa.difficulty}
+                                </span>
+                                <span className="text-[10px] text-zinc-600">{sourceLabel(qa.source)}</span>
+                                {qa.slideNumber != null && (
+                                  <span className="text-[10px] text-zinc-600">slide {qa.slideNumber}</span>
+                                )}
+                              </div>
+                            </div>
+                            {isExpanded ? (
+                              <ChevronUp className="w-4 h-4 text-zinc-600 shrink-0 mt-0.5" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-zinc-600 shrink-0 mt-0.5" />
+                            )}
+                          </button>
+                          {isExpanded && (
+                            <div className="px-4 pb-3 ml-7 border-t border-zinc-800/30 pt-3">
+                              <p className="text-[10px] text-zinc-600 uppercase tracking-wider mb-1">Suggested answer</p>
+                              <p className="text-xs text-zinc-300 leading-relaxed">{qa.suggestedAnswer}</p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
         </div>

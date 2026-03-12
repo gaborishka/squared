@@ -241,6 +241,20 @@ export function buildPresentationContext(project: ProjectDetails, gamePlan: Game
     '- Set agentMode to "monitor" when no intervention is needed, "soft_cue" for gentle hints, "directive" for strong guidance, "rescue" for emergencies.',
     '- Include currentSlide, slideTimeRemaining, and agentMode in every update.',
     '- Respect the attention budget and favor interventions on priority slides.',
+    '',
+    'TIME STRATEGY — Content-Aware Pacing:',
+    '- Track elapsed time against per-slide targets. Communicate strategic time decisions via microPrompt.',
+    '- If the speaker is running behind schedule: use cues like "Wrap up", "Skip example", "Jump ahead".',
+    '- If the speaker has extra time: "Elaborate here", "Add detail".',
+    '- When total time is critically short, use agentMode "directive" and suggest which remaining slides to skip or compress.',
+    '- Prioritize key-message slides over supporting-evidence slides when time is tight.',
+    '---',
+    'NARRATIVE THREAD — Content Navigation:',
+    '- Track which key points from each slide\'s content and speaker notes have been covered by the speaker.',
+    '- If the speaker goes off-track or misses a critical point, use microPrompt to guide back: "Back to [topic]", "Key point: [topic]".',
+    '- If the speaker is completely lost or frozen, use rescueText with the next logical sentence based on the slide content and speaker notes.',
+    '- Track the argument\'s logical flow across slides. If the speaker jumps slides or skips a critical transition, provide a bridging cue via microPrompt.',
+    '- When recovery phrases exist for the current slide in the game plan, prefer those over generating new text.',
   ]
     .filter(Boolean)
     .join('\n\n');

@@ -15,11 +15,13 @@ import {
   TrendingUp,
   Target,
   History,
+  LogOut,
 } from 'lucide-react';
 import squaredIcon from '../../squared_icon.png';
 import { api } from '../api/client';
 import type { GamePlan, ProjectAnalysis, ProjectDetails, RunDetails, RunSummary } from '../types';
 import { useSlidePreviews } from '../hooks/usePdfThumbnails';
+import { useAuth } from '../contexts/AuthContext';
 import { GamePlanView } from './GamePlanView';
 import { ProjectSetup } from './ProjectSetup';
 import { RunAnalysis } from './RunAnalysis';
@@ -33,6 +35,7 @@ interface HomeProps {
 type DetailsTab = 'deck' | 'plan' | 'sessions';
 
 export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: HomeProps) {
+  const { user, logout } = useAuth();
   const [projects, setProjects] = useState<ProjectDetails[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [projectRuns, setProjectRuns] = useState<RunSummary[]>([]);
@@ -274,6 +277,24 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">New</span>
             </button>
+
+            {/* User Menu */}
+            <div className="flex items-center gap-2 pl-3 border-l border-zinc-800/50">
+              {user?.pictureUrl ? (
+                <img src={user.pictureUrl} alt="" className="w-8 h-8 rounded-full" referrerPolicy="no-referrer" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-400">
+                  {user?.name?.[0] ?? user?.email?.[0] ?? '?'}
+                </div>
+              )}
+              <button
+                onClick={() => void logout()}
+                className="text-zinc-500 hover:text-zinc-300 transition-colors p-1.5 rounded-lg hover:bg-zinc-800/40"
+                title="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </header>
 
@@ -630,6 +651,33 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
                                 </div>
                               ))}
                             </div>
+
+                            {/* Q&A Shield preview */}
+                            {latestGamePlan.qaShield && latestGamePlan.qaShield.length > 0 && (
+                              <div className="rounded-xl border border-violet-500/20 bg-violet-500/5 p-5">
+                                <div className="flex items-center justify-between mb-3">
+                                  <p className="text-sm font-medium text-violet-300">
+                                    Q&A Shield — {latestGamePlan.qaShield.length} predicted questions
+                                  </p>
+                                  <button
+                                    onClick={handlePreparePresentation}
+                                    className="text-xs text-violet-400 hover:text-violet-300 font-medium"
+                                  >
+                                    View all
+                                  </button>
+                                </div>
+                                <div className="space-y-2">
+                                  {latestGamePlan.qaShield.slice(0, 3).map((qa) => (
+                                    <p key={qa.id} className="text-xs text-zinc-400 leading-relaxed truncate">
+                                      <span className={`inline-block w-1.5 h-1.5 rounded-full mr-2 ${
+                                        qa.difficulty === 'hard' ? 'bg-red-400' : qa.difficulty === 'medium' ? 'bg-amber-400' : 'bg-emerald-400'
+                                      }`} />
+                                      {qa.question}
+                                    </p>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="rounded-2xl border border-zinc-800/50 bg-zinc-900/30 py-16 text-center">

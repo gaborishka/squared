@@ -342,9 +342,24 @@ async function getProjectSummaryRow(id: string, client?: Pick<PoolClient, 'query
   return queryRow<ProjectRow>(`${PROJECT_SELECT_SQL} WHERE p.id = $1`, [id], client);
 }
 
-export async function listProjects(): Promise<ProjectSummary[]> {
-  const rows = await queryRows<ProjectRow>(`${PROJECT_SELECT_SQL} ORDER BY p.updated_at DESC`);
+export async function listProjects(userId: string): Promise<ProjectSummary[]> {
+  const rows = await queryRows<ProjectRow>(
+    `${PROJECT_SELECT_SQL} WHERE p.user_id = $1 OR p.user_id IS NULL ORDER BY p.updated_at DESC`,
+    [userId],
+  );
   return rows.map(mapProjectSummary);
+}
+
+export async function isProjectOwnedBy(projectId: string, userId: string): Promise<boolean> {
+  const row = await queryRow<{ user_id: string | null }>('SELECT user_id FROM projects WHERE id = $1', [projectId]);
+  if (!row) return false;
+  return row.user_id === null || row.user_id === userId;
+}
+
+export async function isRunOwnedBy(runId: string, userId: string): Promise<boolean> {
+  const row = await queryRow<{ user_id: string | null }>('SELECT user_id FROM runs WHERE id = $1', [runId]);
+  if (!row) return false;
+  return row.user_id === null || row.user_id === userId;
 }
 
 export async function getProject(id: string): Promise<ProjectDetails | null> {
@@ -360,12 +375,12 @@ export async function getProject(id: string): Promise<ProjectDetails | null> {
   };
 }
 
-export async function createProject(input: ProjectInput): Promise<ProjectDetails> {
+export async function createProject(input: ProjectInput, userId: string): Promise<ProjectDetails> {
   const id = crypto.randomUUID();
   await queryRows(
-    `INSERT INTO projects (id, name, description, content, file_path, file_type, slide_count)
-     VALUES ($1, $2, $3, '', NULL, NULL, 0)`,
-    [id, input.name.trim(), input.description?.trim() ?? ''],
+    `INSERT INTO projects (id, name, description, content, file_path, file_type, slide_count, user_id)
+     VALUES ($1, $2, $3, '', NULL, NULL, 0, $4)`,
+    [id, input.name.trim(), input.description?.trim() ?? '', userId],
   );
   return (await getProject(id))!;
 }
@@ -439,13 +454,14 @@ export async function replaceProjectUpload(
   return getProject(projectId);
 }
 
-export async function listRuns(projectId?: string): Promise<RunSummary[]> {
+export async function listRuns(projectId?: string, userId?: string): Promise<RunSummary[]> {
   const rows = await queryRows<RunRow>(
     `SELECT *
      FROM runs
      WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+       AND ($2::uuid IS NULL OR user_id = $2::uuid OR user_id IS NULL)
      ORDER BY created_at DESC`,
-    [projectId ?? null],
+    [projectId ?? null, userId ?? null],
   );
   return rows.map(mapRunSummary);
 }
@@ -471,13 +487,13 @@ export async function getRun(id: string): Promise<RunDetails | null> {
   };
 }
 
-export async function saveRun(payload: SaveRunPayload): Promise<RunDetails> {
+export async function saveRun(payload: SaveRunPayload, userId: string): Promise<RunDetails> {
   await withTransaction(async (client) => {
     await client.query(
       `INSERT INTO runs (
         id, project_id, mode, duration, avg_pace_wpm, avg_confidence,
-        filler_word_count, eye_contact_pct, posture_good_pct, overall_score
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        filler_word_count, eye_contact_pct, posture_good_pct, overall_score, user_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         payload.run.id,
         payload.run.projectId,
@@ -489,6 +505,7 @@ export async function saveRun(payload: SaveRunPayload): Promise<RunDetails> {
         payload.run.eyeContactPct,
         payload.run.postureGoodPct,
         payload.run.overallScore,
+        userId,
       ],
     );
 
@@ -585,6 +602,7 @@ export async function saveGamePlan(plan: GamePlan): Promise<GamePlan> {
         segments: plan.segments,
         attentionBudget: plan.attentionBudget,
         timingStrategy: plan.timingStrategy,
+        ...(plan.qaShield ? { qaShield: plan.qaShield } : {}),
       }),
       plan.createdAt,
     ],
