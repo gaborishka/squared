@@ -298,6 +298,7 @@ export function useLiveAPI({
   const missingFaceTicksRef = useRef(0);
   const missingPoseTicksRef = useRef(0);
   const lastLocalVisualSignatureRef = useRef('');
+  const cueTimerRef = useRef<number | null>(null);
 
   // Session management refs
   const resumptionHandleRef = useRef<string | null>(null);
@@ -505,12 +506,24 @@ export function useLiveAPI({
             rescueText: call.args?.rescueText,
           });
           if (call.args && typeof call.args === 'object') {
-            const update = { ...(call.args as IndicatorUpdate) };
+            const args = call.args as Record<string, unknown>;
+            const update = { ...(args as IndicatorUpdate) };
+            delete (update as Record<string, unknown>).cueDurationSec;
             if (localVisualActiveRef.current) {
               delete update.eyeContact;
               delete update.posture;
             }
             onIndicatorsUpdateRef.current(update);
+
+            // Auto-clear cue after cueDurationSec
+            const duration = typeof args.cueDurationSec === 'number' ? args.cueDurationSec : 0;
+            if (duration > 0 && (args.microPrompt || args.rescueText)) {
+              if (cueTimerRef.current) clearTimeout(cueTimerRef.current);
+              cueTimerRef.current = window.setTimeout(() => {
+                cueTimerRef.current = null;
+                onIndicatorsUpdateRef.current?.({ microPrompt: '', rescueText: '', agentMode: 'monitor' });
+              }, duration * 1000);
+            }
           }
         }
 
@@ -607,6 +620,10 @@ export function useLiveAPI({
     if (indicatorIntervalRef.current) {
       clearInterval(indicatorIntervalRef.current);
       indicatorIntervalRef.current = null;
+    }
+    if (cueTimerRef.current) {
+      clearTimeout(cueTimerRef.current);
+      cueTimerRef.current = null;
     }
     if (localVisualIntervalRef.current) {
       clearInterval(localVisualIntervalRef.current);
@@ -1098,7 +1115,11 @@ export function useLiveAPI({
               slideTimeRemaining: {
                 type: Type.INTEGER,
                 description: "Approximate seconds left before the speaker should transition off the current slide.",
-              }
+              },
+              cueDurationSec: {
+                type: Type.INTEGER,
+                description: "How long (in seconds) the microPrompt/rescueText should remain visible before auto-clearing.",
+              },
             },
           }
         }, {

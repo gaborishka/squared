@@ -40,6 +40,7 @@ export async function createLiveAuthToken(kind: LiveSessionKind): Promise<LiveAu
       uses: TOKEN_USES,
       expireTime: expiresAt,
       newSessionExpireTime: newSessionExpiresAt,
+      lockAdditionalFields: [],
       liveConnectConstraints: {
         model,
         config: {

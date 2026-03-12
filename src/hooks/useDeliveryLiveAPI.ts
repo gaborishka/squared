@@ -260,10 +260,10 @@ const evaluatePosture = (result: PoseLandmarkerResult): PostureResult | null => 
 
 function getDeliveryBaseInstruction(mode: 'rehearsal' | 'presentation'): string {
   if (mode === 'rehearsal') {
-    return 'You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases.';
+    return 'You are DebateCoach, an AI rehearsal coach. The user is practicing a structured presentation. You receive live audio and video. Track delivery quality, risky transitions, filler words, volume, confidence, eye contact, and posture. In rehearsal mode you may interrupt briefly with spoken coaching when needed. Always use updateIndicators to keep the UI current, and use saveSlideAnalysis whenever you identify per-slide issues or strong recovery phrases. The microPrompt and rescueText fields are displayed as a subtitle overlay on the user\'s screen — use them for concise visual cues that complement your spoken coaching.';
   }
 
-  return 'You are DebateCoach, a silent live presentation coach focused on delivery. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send concise delivery cues, agentMode, and rescue text when absolutely necessary. You may receive trusted [AudienceAgent] messages with audience engagement observations, but your own output should stay focused on delivery.';
+  return 'You are DebateCoach, a silent live presentation coach focused on delivery. The user is presenting for real. You receive live audio and video. DO NOT SPEAK. Only use updateIndicators to send concise delivery cues, agentMode, and rescue text when absolutely necessary. The microPrompt and rescueText fields are displayed as a subtitle overlay on the user\'s screen — this is your only communication channel with the speaker. You may receive trusted [AudienceAgent] messages with audience engagement observations, but your own output should stay focused on delivery.';
 }
 
 export function useDeliveryLiveAPI({
@@ -319,6 +319,7 @@ export function useDeliveryLiveAPI({
   const missingFaceTicksRef = useRef(0);
   const missingPoseTicksRef = useRef(0);
   const lastLocalVisualSignatureRef = useRef('');
+  const cueTimerRef = useRef<number | null>(null);
   const pendingContextNotesRef = useRef<string[]>([]);
 
   const resetDerivedIndicatorsState = useCallback(() => {
@@ -405,6 +406,10 @@ export function useDeliveryLiveAPI({
     if (indicatorIntervalRef.current) {
       clearInterval(indicatorIntervalRef.current);
       indicatorIntervalRef.current = null;
+    }
+    if (cueTimerRef.current) {
+      clearTimeout(cueTimerRef.current);
+      cueTimerRef.current = null;
     }
     if (localVisualIntervalRef.current) {
       clearInterval(localVisualIntervalRef.current);
@@ -816,13 +821,15 @@ export function useDeliveryLiveAPI({
                   volumeLevel: { type: Type.STRING, description: 'Volume level.' },
                   overallScore: { type: Type.INTEGER, description: '1-100 overall performance score.' },
                   currentSlide: { type: Type.INTEGER, description: 'Fallback slide estimate when no screen agent is active.' },
-                  microPrompt: { type: Type.STRING, description: 'A concise delivery cue for the HUD.' },
-                  rescueText: { type: Type.STRING, description: 'Short rescue text when the speaker is stuck.' },
+                  microPrompt: { type: Type.STRING, description: 'Concise cue shown as subtitle overlay on the speaker screen. 1-5 words. Set to "" to clear.' },
+                  rescueText: { type: Type.STRING, description: 'Rescue text shown as subtitle overlay detail when speaker is stuck. Set to "" to clear.' },
                   agentMode: {
                     type: Type.STRING,
+                    description: 'Subtitle overlay only appears when agentMode is not "monitor".',
                     enum: ['monitor', 'soft_cue', 'directive', 'rescue'],
                   },
                   slideTimeRemaining: { type: Type.INTEGER, description: 'Fallback slide time estimate when no screen agent is active.' },
+                  cueDurationSec: { type: Type.INTEGER, description: 'How long (in seconds) the microPrompt/rescueText should remain visible before auto-clearing.' },
                 },
               },
             }, {
@@ -1092,6 +1099,16 @@ export function useDeliveryLiveAPI({
                     delete update.posture;
                   }
                   onUpdate(update);
+
+                  // Auto-clear cue after cueDurationSec
+                  const duration = typeof args.cueDurationSec === 'number' ? (args.cueDurationSec as number) : 0;
+                  if (duration > 0 && (args.microPrompt || args.rescueText)) {
+                    if (cueTimerRef.current) clearTimeout(cueTimerRef.current);
+                    cueTimerRef.current = window.setTimeout(() => {
+                      cueTimerRef.current = null;
+                      onUpdate({ microPrompt: '', rescueText: '', agentMode: 'monitor' });
+                    }, duration * 1000);
+                  }
                 }
 
                 if (call.name === 'saveSlideAnalysis' && onSlideAnalysis && call.args && typeof call.args === 'object') {

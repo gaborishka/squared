@@ -256,17 +256,48 @@ export function dualAgentToSubtitleState(
   delivery: DeliveryAgentState | null,
   audience: AudienceAgentState | null,
 ): SubtitleState {
-  const overlay = composeDualAgentOverlayState(delivery, audience);
-  // Only show audience subtitles for critical priority — routine observations are noise
+  const deliveryState = delivery ?? DEFAULT_DELIVERY_AGENT_STATE;
   const audienceState = audience ?? DEFAULT_AUDIENCE_AGENT_STATE;
+
+  // Subtitle overlay only shows microPrompt / rescueText — feedbackMessage stays in the side panel.
+  const hasDeliveryCue = Boolean(deliveryState.microPrompt || deliveryState.rescueText);
+  const deliveryVisible = hasDeliveryCue && deliveryState.agentMode !== 'monitor';
+  const deliveryLane = {
+    visible: deliveryVisible,
+    mode: deliveryState.agentMode,
+    prompt: deliveryState.microPrompt,
+    detail: deliveryState.rescueText,
+  };
+
+  // Only show audience subtitles for critical priority — routine observations are noise
   const showAudienceSubtitle = audienceState.priority === 'critical'
     || audienceState.captureStatus === 'lost';
-  const audienceSub = showAudienceSubtitle
-    ? overlay.audience
-    : { ...overlay.audience, visible: false, prompt: '', detail: '' };
+  const audienceHasCue = Boolean(audienceState.audiencePrompt || audienceState.audienceDetails);
+  const audienceLane = (showAudienceSubtitle && audienceHasCue)
+    ? {
+      visible: true,
+      priority: audienceState.priority,
+      captureStatus: audienceState.captureStatus,
+      prompt: audienceState.audiencePrompt,
+      detail: audienceState.audienceDetails,
+      engagement: audienceState.engagement,
+      reactions: audienceState.reactions,
+      handsRaised: audienceState.handsRaised,
+    }
+    : {
+      visible: false as const,
+      priority: audienceState.priority,
+      captureStatus: audienceState.captureStatus,
+      prompt: '',
+      detail: '',
+      engagement: audienceState.engagement,
+      reactions: audienceState.reactions,
+      handsRaised: audienceState.handsRaised,
+    };
+
   return {
-    visible: overlay.delivery.visible || audienceSub.visible,
-    delivery: overlay.delivery,
-    audience: audienceSub,
+    visible: deliveryLane.visible || audienceLane.visible,
+    delivery: deliveryLane,
+    audience: audienceLane,
   };
 }
