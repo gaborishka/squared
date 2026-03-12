@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { LoaderCircle, Upload, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { FileUp, LoaderCircle, Sparkles, X } from 'lucide-react';
 import { api } from '../api/client';
 import type { ProjectDetails } from '../types';
 
@@ -14,21 +14,31 @@ export function ProjectSetup({ isOpen, initialProject, onClose, onSaved }: Proje
   const isEditing = Boolean(initialProject);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [slides, setSlides] = useState<ProjectDetails['slides']>([]);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (!isOpen) return;
     setName(initialProject?.name ?? '');
     setDescription(initialProject?.description ?? '');
-    setSlides(initialProject?.slides ?? []);
     setSelectedFile(null);
     setError(null);
   }, [initialProject, isOpen]);
 
-  const hasUploadPreview = useMemo(() => slides.length > 0, [slides]);
+  const handleEscape = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isSaving) onClose();
+    },
+    [onClose, isSaving],
+  );
+
+  useEffect(() => {
+    if (!isOpen) return;
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isOpen, handleEscape]);
 
   if (!isOpen) return null;
 
@@ -47,7 +57,6 @@ export function ProjectSetup({ isOpen, initialProject, onClose, onSaved }: Proje
         ? await api.updateProject(initialProject.id, {
             name: name.trim(),
             description: description.trim(),
-            slides: slides.map((slide) => ({ id: slide.id, speakerNotes: slide.speakerNotes })),
           })
         : await api.createProject({
             name: name.trim(),
@@ -56,14 +65,6 @@ export function ProjectSetup({ isOpen, initialProject, onClose, onSaved }: Proje
 
       if (selectedFile) {
         project = await api.uploadProjectFile(project.id, selectedFile);
-      }
-
-      if (slides.length > 0) {
-        project = await api.updateProject(project.id, {
-          name: project.name,
-          description: project.description,
-          slides: slides.map((slide) => ({ id: slide.id, speakerNotes: slide.speakerNotes })),
-        });
       }
 
       onSaved(project);
@@ -77,138 +78,121 @@ export function ProjectSetup({ isOpen, initialProject, onClose, onSaved }: Proje
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm p-4 md:p-10 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm p-4 md:p-10 overflow-y-auto flex items-start justify-center"
+      onMouseDown={(event) => {
+        if (formRef.current && !formRef.current.contains(event.target as Node) && !isSaving) onClose();
+      }}
+    >
       <form
+        ref={formRef}
         onSubmit={handleSave}
-        className="max-w-5xl mx-auto rounded-[36px] border border-zinc-800 bg-zinc-950 shadow-2xl overflow-hidden"
+        className="w-full max-w-xl rounded-3xl border border-zinc-800/80 bg-zinc-950 shadow-2xl shadow-black/40 overflow-hidden relative"
       >
-        <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-800">
-          <div>
-            <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">
-              {isEditing ? 'Edit Project' : 'New Project'}
-            </p>
-            <h3 className="text-2xl font-semibold text-zinc-50 mt-1">
-              {isEditing ? 'Refine your presentation project' : 'Create a presentation project'}
-            </h3>
+        {/* Decorative gradient orb */}
+        <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-64 h-64 rounded-full bg-indigo-500/10 blur-[100px] pointer-events-none" />
+
+        {/* Close button */}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute top-4 right-4 z-10 p-2 rounded-xl text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
+        {/* Header */}
+        <div className="relative px-8 pt-10 pb-2 text-center">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 mb-5">
+            <Sparkles className="w-5 h-5 text-indigo-400" />
           </div>
-          <button type="button" onClick={onClose} className="p-2 rounded-full text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900">
-            <X className="w-5 h-5" />
-          </button>
+          <h3 className="text-2xl font-semibold text-zinc-50 tracking-tight">
+            {isEditing ? 'Edit project' : 'New project'}
+          </h3>
+          <p className="text-sm text-zinc-500 mt-1.5 max-w-xs mx-auto">
+            {isEditing
+              ? 'Update your presentation details and coaching context.'
+              : 'Set up your deck and start rehearsing with AI coaching.'}
+          </p>
         </div>
 
-        <div className="grid lg:grid-cols-[1.1fr_0.9fr] gap-0">
-          <section className="p-6 md:p-8 border-b lg:border-b-0 lg:border-r border-zinc-800 space-y-6">
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-zinc-300">Project Name</label>
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-                placeholder="Quarterly GTM deck"
-              />
-            </div>
+        {/* Form body */}
+        <div className="px-8 pt-6 pb-2 space-y-5">
+          {/* Project Name */}
+          <div className="space-y-1.5">
+            <label htmlFor="project-name" className="block text-xs font-medium text-zinc-400 uppercase tracking-wider">Name</label>
+            <input
+              id="project-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-colors"
+              placeholder="Quarterly GTM deck"
+            />
+          </div>
 
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-zinc-300">Description</label>
-              <textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                className="w-full min-h-32 rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-                placeholder="What this presentation is for, who the audience is, and what a strong delivery should emphasize."
-              />
-            </div>
+          {/* Description */}
+          <div className="space-y-1.5">
+            <label htmlFor="project-description" className="block text-xs font-medium text-zinc-400 uppercase tracking-wider">Description</label>
+            <textarea
+              id="project-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={3}
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/30 transition-colors resize-none"
+              placeholder="Audience, goals, and what a strong delivery should emphasize."
+            />
+          </div>
 
-            <div className="rounded-[28px] border border-dashed border-zinc-700 bg-zinc-900/70 p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h4 className="text-lg font-semibold text-zinc-100">Attach presentation file</h4>
-                  <p className="text-sm text-zinc-400 mt-1">
-                    Supports `PPTX`, `PDF`, `TXT`, and `MD`. Uploading replaces the current slide structure.
-                  </p>
-                </div>
-                <Upload className="w-5 h-5 text-emerald-400 shrink-0 mt-1" />
+          {/* File upload */}
+          <label className="group block rounded-xl border border-dashed border-zinc-700/80 bg-zinc-900/40 hover:bg-zinc-900/60 hover:border-zinc-600 p-5 cursor-pointer transition-all">
+            <input
+              type="file"
+              accept=".pptx,.pdf,.txt,.md"
+              className="hidden"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+            />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-zinc-800/80 group-hover:bg-zinc-800 transition-colors shrink-0">
+                <FileUp className="w-4 h-4 text-zinc-400 group-hover:text-indigo-400 transition-colors" />
               </div>
-              <label className="mt-4 block rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-4 cursor-pointer hover:border-zinc-700 transition-colors">
-                <input
-                  type="file"
-                  accept=".pptx,.pdf,.txt,.md"
-                  className="hidden"
-                  onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-                />
-                <span className="block text-sm font-medium text-zinc-200">
-                  {selectedFile ? selectedFile.name : 'Choose a file to parse on save'}
-                </span>
-                <span className="block text-xs text-zinc-500 mt-1">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-zinc-200 truncate">
+                  {selectedFile ? selectedFile.name : 'Attach presentation file'}
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
                   {selectedFile
-                    ? 'The backend will extract slides and update the project after you save.'
-                    : 'If you skip this, you can still add structure later.'}
-                </span>
-              </label>
-            </div>
-
-            {error && <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">{error}</div>}
-          </section>
-
-          <section className="p-6 md:p-8 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Slide Preview</p>
-                <h4 className="text-xl font-semibold text-zinc-50 mt-1">
-                  {hasUploadPreview ? `${slides.length} slides ready` : 'Upload to preview'}
-                </h4>
+                    ? 'Will be parsed when you save'
+                    : 'PPTX, PDF, TXT, or MD — optional'}
+                </p>
               </div>
-              {hasUploadPreview && (
-                <span className="rounded-full bg-zinc-900 px-3 py-1 text-xs text-zinc-300">
-                  Speaker notes are editable
-                </span>
-              )}
             </div>
+          </label>
 
-            <div className="max-h-[60vh] overflow-y-auto pr-1 space-y-4">
-              {slides.length === 0 ? (
-                <div className="rounded-[28px] border border-zinc-800 bg-zinc-900/60 p-6 text-sm text-zinc-400">
-                  Once a file is uploaded, extracted slide titles and content will appear here for quick review.
-                </div>
-              ) : (
-                slides.map((slide, index) => (
-                  <article key={slide.id} className="rounded-[28px] border border-zinc-800 bg-zinc-900/60 p-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Slide {slide.slideNumber || index + 1}</p>
-                        <h5 className="text-lg font-semibold text-zinc-100 mt-1">{slide.title}</h5>
-                      </div>
-                    </div>
-                    <p className="text-sm text-zinc-400 mt-3 whitespace-pre-wrap line-clamp-6">{slide.content || 'No extracted text.'}</p>
-                    <textarea
-                      value={slide.speakerNotes}
-                      onChange={(event) =>
-                        setSlides((current) =>
-                          current.map((item) =>
-                            item.id === slide.id ? { ...item, speakerNotes: event.target.value } : item,
-                          ),
-                        )
-                      }
-                      className="mt-4 w-full min-h-24 rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-                      placeholder="Speaker notes, rescue phrases, or reminders for this slide."
-                    />
-                  </article>
-                ))
-              )}
+          {/* Error */}
+          {error && (
+            <div className="rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3 text-sm text-red-300">
+              {error}
             </div>
-          </section>
+          )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-5 border-t border-zinc-800">
-          <button type="button" onClick={onClose} className="rounded-full px-4 py-2.5 text-sm font-medium text-zinc-300 hover:text-zinc-100">
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2.5 px-8 py-6">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl px-4 py-2.5 text-sm font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 transition-colors"
+          >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSaving}
-            className="inline-flex items-center gap-2 rounded-full bg-indigo-500 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 hover:shadow-indigo-500/30 hover:brightness-110 disabled:opacity-50 disabled:pointer-events-none transition-all"
           >
             {isSaving && <LoaderCircle className="w-4 h-4 animate-spin" />}
-            {isEditing ? 'Save Project' : 'Create Project'}
+            {isEditing ? 'Save changes' : 'Create project'}
           </button>
         </div>
       </form>
