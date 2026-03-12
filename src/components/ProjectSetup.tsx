@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FileUp, LoaderCircle, Sparkles, X } from 'lucide-react';
+import { FileUp, LoaderCircle, X } from 'lucide-react';
+import squaredIcon from '../../squared_icon.png';
 import { api } from '../api/client';
 import type { ProjectDetails } from '../types';
 
@@ -104,9 +105,7 @@ export function ProjectSetup({ isOpen, initialProject, onClose, onSaved }: Proje
 
         {/* Header */}
         <div className="relative px-8 pt-10 pb-2 text-center">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/20 mb-5">
-            <Sparkles className="w-5 h-5 text-indigo-400" />
-          </div>
+          <img src={squaredIcon} alt="Squared" className="w-12 h-12 mb-5 inline-block" />
           <h3 className="text-2xl font-semibold text-zinc-50 tracking-tight">
             {isEditing ? 'Edit project' : 'New project'}
           </h3>

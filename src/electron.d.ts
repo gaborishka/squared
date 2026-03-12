@@ -4,6 +4,8 @@ declare global {
   interface Window {
     squaredElectron?: {
       isElectron: boolean;
+      platform?: string;
+      openExternalAuth: (url: string) => void;
       updatePill: (state: PillState) => void;
       updateSubtitles: (state: SubtitleState) => void;
       clearOverlay: () => void;

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from 'electron';
 import { fork, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +10,8 @@ import { buildLocalUrl, DEFAULT_SERVER_PORT, findAvailablePort } from './runtime
 import { createAppTray } from './tray.js';
 import type { DesktopAppStatus } from '../shared/types.js';
 import { migrateLegacyAppData } from '../server/config/dataMigration.js';
+
+const CUSTOM_PROTOCOL = 'squared';
 
 let mainWindow: BrowserWindow | null = null;
 let pillWindow: BrowserWindow | null = null;
@@ -305,6 +307,8 @@ async function createWindows(): Promise<void> {
     minHeight: 760,
     backgroundColor: '#09090b',
     title: 'Squared',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    trafficLightPosition: process.platform === 'darwin' ? { x: 20, y: 12 } : undefined,
     webPreferences: {
       preload: paths.preloadPath,
       contextIsolation: true,
@@ -358,6 +362,99 @@ async function createWindows(): Promise<void> {
     ipcRegistration = null;
   });
 }
+
+// --- Deep-link / custom protocol auth flow ---
+
+function getAppUrl(): string {
+  const paths = getElectronPaths();
+  if (isDev) return paths.devServerUrl;
+  return getPackagedHostedAppUrl(paths);
+}
+
+async function handleAuthDeepLink(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+
+  if (parsed.host !== 'auth' || !parsed.pathname.startsWith('/callback')) return;
+
+  const error = parsed.searchParams.get('error');
+  if (error) {
+    dialog.showErrorBox('Sign-in failed', 'Google sign-in did not complete. Please try again.');
+    return;
+  }
+
+  const sessionId = parsed.searchParams.get('session');
+  if (!sessionId) return;
+
+  // Set the session cookie in Electron's session so the webview is authenticated
+  const appUrl = getAppUrl();
+  await session.defaultSession.cookies.set({
+    url: appUrl,
+    name: 'sq_session',
+    value: sessionId,
+    path: '/',
+    httpOnly: true,
+    secure: appUrl.startsWith('https'),
+    sameSite: 'lax',
+    expirationDate: Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000),
+  });
+
+  // Reload the main window to pick up the authenticated session
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    focusMainWindow();
+    mainWindow.loadURL(appUrl);
+  }
+}
+
+// Windows/Linux: handle deep links via second-instance
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  // Register the custom protocol for deep-link auth (after acquiring the lock
+  // so a second instance doesn't overwrite the first's protocol registration).
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(CUSTOM_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+    }
+  } else {
+    app.setAsDefaultProtocolClient(CUSTOM_PROTOCOL);
+  }
+
+  app.on('second-instance', (_event, argv) => {
+    const deepLinkUrl = argv.find((arg) => arg.startsWith(`${CUSTOM_PROTOCOL}://`));
+    if (deepLinkUrl) {
+      void handleAuthDeepLink(deepLinkUrl);
+    } else {
+      focusMainWindow();
+    }
+  });
+}
+
+// macOS: handle deep links via open-url event (registered early for cold-start launches)
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  void handleAuthDeepLink(url);
+});
+
+// IPC handler: open auth URL in system browser (validated to auth endpoints only)
+ipcMain.on('auth:open-external', (_event, url: string) => {
+  try {
+    const parsed = new URL(url);
+    const allowedProtocol = parsed.protocol === 'https:' || (isDev && parsed.protocol === 'http:');
+    if (allowedProtocol && parsed.pathname === '/api/auth/google') {
+      void shell.openExternal(url);
+    } else {
+      console.warn('Blocked openExternal for disallowed URL:', url);
+    }
+  } catch {
+    console.warn('Blocked openExternal for invalid URL:', url);
+  }
+});
 
 app.whenReady().then(() => {
   void createWindows().catch((error) => {

@@ -97,6 +97,12 @@
         "to": "electron"
       }
     ],
+    "protocols": [
+      {
+        "name": "Squared",
+        "schemes": ["squared"]
+      }
+    ],
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.business",

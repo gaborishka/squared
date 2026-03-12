@@ -71,6 +71,14 @@ export function LandingPage() {
           {/* CTA */}
           <a
             href={`${api.getAuthBaseUrl()}/api/auth/google`}
+            onClick={(e) => {
+              if (window.squaredElectron?.isElectron) {
+                e.preventDefault();
+                const base = api.getAuthBaseUrl() || window.location.origin;
+                const authUrl = `${base}/api/auth/google?platform=desktop`;
+                window.squaredElectron.openExternalAuth(authUrl);
+              }
+            }}
             className="group mt-8 inline-flex items-center gap-3 rounded-2xl bg-white px-7 py-3.5 text-[17px] font-semibold text-zinc-900 hover:bg-zinc-100 transition-all duration-200 shadow-lg shadow-white/10 hover:shadow-xl hover:shadow-white/20 hover:scale-[1.02] active:scale-[0.98]"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">

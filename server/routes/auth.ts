@@ -23,6 +23,18 @@ function getOAuthClient(): OAuth2Client {
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const OAUTH_STATE_COOKIE = 'sq_oauth_state';
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes
+const CUSTOM_PROTOCOL = 'squared';
+
+// In-memory store for pending OAuth nonces — avoids cookie domain mismatch
+// between 127.0.0.1 (Electron) and localhost (Google redirect).
+const pendingOAuthFlows = new Map<string, { platform: string; expiresAt: number }>();
+
+function cleanExpiredFlows(): void {
+  const now = Date.now();
+  for (const [key, value] of pendingOAuthFlows) {
+    if (now > value.expiresAt) pendingOAuthFlows.delete(key);
+  }
+}
 
 function isSecureContext(): boolean {
   const appUrl = process.env.APP_URL || '';
@@ -39,11 +51,17 @@ function cookieOptions(secure: boolean) {
   };
 }
 
-authRouter.get('/google', (_req, res) => {
+authRouter.get('/google', (req, res) => {
   const client = getOAuthClient();
   const state = crypto.randomBytes(32).toString('hex');
+  const platform = req.query.platform === 'desktop' ? 'desktop' : 'web';
   const secure = isSecureContext();
 
+  // Store nonce + platform in memory (works regardless of cookie domain)
+  cleanExpiredFlows();
+  pendingOAuthFlows.set(state, { platform, expiresAt: Date.now() + OAUTH_STATE_MAX_AGE_MS });
+
+  // Also set cookie as fallback for web flows
   res.cookie(OAUTH_STATE_COOKIE, state, {
     httpOnly: true,
     secure,
@@ -64,13 +82,26 @@ authRouter.get('/google', (_req, res) => {
 authRouter.get('/callback', async (req, res) => {
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
-  const storedState = req.cookies?.[OAUTH_STATE_COOKIE];
 
-  // Clear the state cookie regardless of outcome
+  // Verify state: try in-memory store first, then cookie fallback
+  cleanExpiredFlows();
+  const pending = state ? pendingOAuthFlows.get(state) : undefined;
+  const storedState = req.cookies?.[OAUTH_STATE_COOKIE];
+  const stateValid = (pending && Date.now() < pending.expiresAt) || (storedState && state === storedState);
+  // Only trust platform from in-memory store; cookie fallback is always web
+  const platform = pending?.platform ?? (storedState && state === storedState ? 'web' : undefined);
+
+  // Clean up
+  if (state) pendingOAuthFlows.delete(state);
   res.clearCookie(OAUTH_STATE_COOKIE, { path: '/api/auth/callback' });
 
-  if (!code || !state || !storedState || state !== storedState) {
-    res.redirect('/?error=auth_failed');
+  if (!code || !state || !stateValid) {
+    // If platform is unknown (state expired/missing), fall back to web error page
+    if (platform === 'desktop') {
+      res.redirect(`${CUSTOM_PROTOCOL}://auth/callback?error=auth_failed`);
+    } else {
+      res.redirect('/?error=auth_failed');
+    }
     return;
   }
 
@@ -112,7 +143,7 @@ authRouter.get('/callback', async (req, res) => {
     // Claim any orphan records from before auth was added
     await claimOrphanRecords(user!.id);
 
-    // Create session
+    // Create session (256-bit token for high-entropy session secret)
     const sessionId = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS);
     await queryRows(
@@ -123,11 +154,20 @@ authRouter.get('/callback', async (req, res) => {
     // Clean up expired sessions for this user
     await queryRows(`DELETE FROM sessions WHERE user_id = $1 AND expires_at < NOW()`, [user!.id]);
 
-    res.cookie(SESSION_COOKIE, sessionId, cookieOptions(isSecureContext()));
-    res.redirect('/');
+    if (platform === 'desktop') {
+      // Redirect to custom protocol so Electron can capture the session
+      res.redirect(`${CUSTOM_PROTOCOL}://auth/callback?session=${sessionId}`);
+    } else {
+      res.cookie(SESSION_COOKIE, sessionId, cookieOptions(isSecureContext()));
+      res.redirect('/');
+    }
   } catch (error) {
     console.error('OAuth callback error:', error);
-    res.redirect('/?error=auth_failed');
+    if (platform === 'desktop') {
+      res.redirect(`${CUSTOM_PROTOCOL}://auth/callback?error=auth_failed`);
+    } else {
+      res.redirect('/?error=auth_failed');
+    }
   }
 });
 

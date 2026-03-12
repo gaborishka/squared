@@ -72,10 +72,29 @@ function AppContent() {
   );
 }
 
+const isElectronMac = window.squaredElectron?.platform === 'darwin';
+
+function TitleBarDragRegion() {
+  if (!isElectronMac) return null;
+  return (
+    <div
+      className="fixed top-0 inset-x-0 z-40 bg-zinc-950"
+      style={{ WebkitAppRegion: 'drag', height: 38 } as React.CSSProperties}
+    />
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <TitleBarDragRegion />
+      {isElectronMac ? (
+        <div style={{ paddingTop: 38 }}>
+          <AppContent />
+        </div>
+      ) : (
+        <AppContent />
+      )}
     </AuthProvider>
   );
 }

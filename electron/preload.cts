@@ -3,6 +3,10 @@ import type { DesktopAppStatus, PillState, SubtitleState } from '../shared/types
 
 contextBridge.exposeInMainWorld('squaredElectron', {
   isElectron: true,
+  platform: process.platform,
+
+  // Auth: open URL in system browser for Google sign-in
+  openExternalAuth: (url: string) => ipcRenderer.send('auth:open-external', url),
 
   clearOverlay: () => ipcRenderer.send('overlay:clear'),
 

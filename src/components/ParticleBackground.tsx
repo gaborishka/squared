@@ -134,21 +134,21 @@ export function ParticleBackground({ className = '' }: { className?: string }) {
     resize();
     animationRef.current = requestAnimationFrame(draw);
     window.addEventListener('resize', resize);
-    canvas.addEventListener('mousemove', handleMouse);
-    canvas.addEventListener('mouseleave', handleMouseLeave);
+    window.addEventListener('mousemove', handleMouse);
+    document.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
       cancelAnimationFrame(animationRef.current);
       window.removeEventListener('resize', resize);
-      canvas.removeEventListener('mousemove', handleMouse);
-      canvas.removeEventListener('mouseleave', handleMouseLeave);
+      window.removeEventListener('mousemove', handleMouse);
+      document.removeEventListener('mouseleave', handleMouseLeave);
     };
   }, []);
 
   return (
     <canvas
       ref={canvasRef}
-      className={`pointer-events-auto ${className}`}
+      className={`pointer-events-none ${className}`}
     />
   );
 }
