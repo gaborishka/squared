@@ -19,3 +19,5 @@ server/storage/uploads/
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+.playwright-cli/
+run-artifacts/
