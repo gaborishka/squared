@@ -33,7 +33,7 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-50 font-sans selection:bg-indigo-500/30">
+    <div className="h-full bg-zinc-950 text-zinc-50 font-sans selection:bg-indigo-500/30">
       {mode === 'home' && (
         <Home
           refreshToken={refreshToken}
@@ -78,7 +78,7 @@ function TitleBarDragRegion() {
   if (!isElectronMac) return null;
   return (
     <div
-      className="fixed top-0 inset-x-0 z-40 bg-zinc-950"
+      className="fixed top-0 inset-x-0 z-[60] bg-zinc-950"
       style={{ WebkitAppRegion: 'drag', height: 38 } as React.CSSProperties}
     />
   );
@@ -89,8 +89,10 @@ export default function App() {
     <AuthProvider>
       <TitleBarDragRegion />
       {isElectronMac ? (
-        <div style={{ paddingTop: 38 }}>
-          <AppContent />
+        <div className="h-screen flex flex-col" style={{ paddingTop: 38 }}>
+          <div className="flex-1 min-h-0">
+            <AppContent />
+          </div>
         </div>
       ) : (
         <AppContent />

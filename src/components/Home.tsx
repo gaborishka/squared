@@ -205,7 +205,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
 
   return (
     <>
-      <div className="h-screen flex flex-col overflow-hidden bg-zinc-950">
+      <div className="h-full flex flex-col overflow-hidden bg-zinc-950">
         {/* ──── Header ──── */}
         <header className="relative z-50 flex items-center justify-between px-6 lg:px-10 py-5 border-b border-zinc-800/40 bg-zinc-950/80 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-4">
@@ -302,7 +302,7 @@ export function Home({ refreshToken, onStartRehearsal, onStartPresentation }: Ho
         </header>
 
         {/* ──── Main Content ──── */}
-        <main className="flex-1 min-h-0 overflow-y-auto relative">
+        <main className="flex-1 min-h-0 overflow-y-auto scrollbar-hide relative">
           {/* Particle network background */}
           {!selectedProject && !isLoading && (
             <div className="absolute inset-0">

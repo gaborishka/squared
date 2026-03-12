@@ -791,9 +791,7 @@ export function useDeliveryLiveAPI({
           },
           proactivity: { proactiveAudio: mode === 'rehearsal' },
           enableAffectiveDialog: true,
-          ...(mode === 'rehearsal'
-            ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } } }
-            : {}),
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
           systemInstruction,
           tools: [{
             functionDeclarations: [{

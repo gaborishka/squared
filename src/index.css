@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 .animate-wave {
   animation: wave 1s ease-in-out infinite;
   transform-origin: center;
