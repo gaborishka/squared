@@ -1,12 +1,10 @@
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, session, shell } from 'electron';
-import { fork, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { registerIpc } from './ipc.js';
 import { createPillWindow } from './statusPill.js';
 import { createSubtitlesWindow } from './subtitles.js';
 import { getElectronPaths } from './paths.js';
-import { buildLocalUrl, DEFAULT_SERVER_PORT, findAvailablePort } from './runtime.js';
 import { createAppTray } from './tray.js';
 import type { DesktopAppStatus } from '../shared/types.js';
 import { migrateLegacyAppData } from '../server/config/dataMigration.js';
@@ -16,28 +14,28 @@ const CUSTOM_PROTOCOL = 'squared';
 let mainWindow: BrowserWindow | null = null;
 let pillWindow: BrowserWindow | null = null;
 let subtitlesWindow: BrowserWindow | null = null;
-let bundledServer: ChildProcess | null = null;
-let bundledServerPort: number | null = null;
 let ipcRegistration: ReturnType<typeof registerIpc> | null = null;
 let trayRegistration: ReturnType<typeof createAppTray> | null = null;
 let overlayEnabled = true;
 let appStatus: DesktopAppStatus = { mode: 'idle', connected: false };
+let desktopSessionId: string | null = null;
 const isDev = !app.isPackaged;
-type ServerExitInfo = { code: number | null; signal: NodeJS.Signals | null };
+
+function readRuntimeConfig(): { apiBaseUrl?: string } {
+  try {
+    const raw = fs.readFileSync(getElectronPaths().runtimeConfigPath, 'utf8');
+    return JSON.parse(raw) as { apiBaseUrl?: string };
+  } catch (error) {
+    console.error('Failed to read desktop runtime config', error);
+    return {};
+  }
+}
 
 function getStatusLabel(status: DesktopAppStatus): string {
   if (status.connected && status.mode === 'rehearsal') return 'Rehearsal active';
   if (status.connected && status.mode === 'presentation') return 'Presentation active';
   if (status.mode !== 'idle') return 'Connecting';
   return 'Ready';
-}
-
-function getBundledServerStartupError(exitInfo: ServerExitInfo | null): string {
-  if (exitInfo === null) {
-    return 'The bundled API server did not become ready in time.';
-  }
-
-  return `The bundled API server exited before it became ready (code: ${exitInfo.code ?? 'unknown'}, signal: ${exitInfo.signal ?? 'none'}).`;
 }
 
 function focusMainWindow(): void {
@@ -53,28 +51,29 @@ function refreshTray(): void {
   trayRegistration?.refresh();
 }
 
-function stopBundledServer(): void {
-  if (!bundledServer) return;
-  bundledServer.kill();
-  bundledServer = null;
-  bundledServerPort = null;
+async function syncDesktopSessionToRenderer(): Promise<void> {
+  if (!mainWindow || mainWindow.isDestroyed() || !desktopSessionId) return;
+
+  const encodedSessionId = JSON.stringify(desktopSessionId);
+  await mainWindow.webContents.executeJavaScript(
+    `try { window.localStorage.setItem('sq_desktop_session', ${encodedSessionId}); } catch {}`,
+    true,
+  ).catch((error) => {
+    console.warn('Failed to sync desktop session to renderer', error);
+  });
 }
 
-async function waitForBundledServer(url: string, timeoutMs = 12000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
+function resolveConfiguredBackendBaseUrl(): string | null {
+  const runtimeValue = readRuntimeConfig().apiBaseUrl?.trim();
+  if (runtimeValue) return runtimeValue.replace(/\/$/, '');
 
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url);
-      if (response.ok) return true;
-    } catch {
-      // Server is still starting up.
-    }
+  const desktopEnvValue = process.env.DESKTOP_API_BASE_URL?.trim();
+  if (desktopEnvValue) return desktopEnvValue.replace(/\/$/, '');
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
+  const publicEnvValue = process.env.APP_URL?.trim();
+  if (publicEnvValue) return publicEnvValue.replace(/\/$/, '');
 
-  return false;
+  return null;
 }
 
 function migratePackagedLegacyData(paths: ReturnType<typeof getElectronPaths>): void {
@@ -95,77 +94,6 @@ function migratePackagedLegacyData(paths: ReturnType<typeof getElectronPaths>): 
   if (migration.copiedDatabase || migration.copiedUploads) {
     console.log('Migrated legacy Squared desktop data', migration);
   }
-}
-
-function getPackagedHostedAppUrl(paths: ReturnType<typeof getElectronPaths>): string {
-  const envUrl = process.env.APP_URL?.trim();
-  if (envUrl) {
-    return envUrl.replace(/\/$/, '');
-  }
-
-  try {
-    const raw = fs.readFileSync(paths.runtimeConfigPath, 'utf8');
-    const parsed = JSON.parse(raw) as { hostedAppUrl?: string };
-    const configuredUrl = parsed.hostedAppUrl?.trim();
-    if (configuredUrl) {
-      return configuredUrl.replace(/\/$/, '');
-    }
-  } catch (error) {
-    console.error('Failed to read desktop runtime config', error);
-  }
-
-  dialog.showErrorBox(
-    'Squared requires a hosted app URL',
-    'APP_URL is not configured for the packaged desktop app. Rebuild the desktop bundle with APP_URL set to the hosted service URL.',
-  );
-  throw new Error('APP_URL is required for the packaged desktop app.');
-}
-
-async function ensureBundledServer(): Promise<number> {
-  if (isDev) return DEFAULT_SERVER_PORT;
-  if (bundledServer && bundledServerPort !== null) return bundledServerPort;
-  if (!process.env.DATABASE_URL?.trim()) {
-    dialog.showErrorBox(
-      'Squared requires PostgreSQL',
-      'DATABASE_URL is not configured. The desktop app launches a local API server, but that server now requires a PostgreSQL connection.',
-    );
-    throw new Error('DATABASE_URL is required for the packaged desktop app.');
-  }
-
-  const paths = getElectronPaths();
-  migratePackagedLegacyData(paths);
-  let startupExit: ServerExitInfo | null = null;
-  const serverPort = await findAvailablePort(DEFAULT_SERVER_PORT);
-  bundledServerPort = serverPort;
-  bundledServer = fork(paths.serverEntry, [], {
-    cwd: paths.userDataPath,
-    env: {
-      ...process.env,
-      PORT: String(serverPort),
-      SQUARED_DATA_DIR: paths.userDataPath,
-      SQUARED_STATIC_DIR: paths.frontendDistDir,
-    },
-    stdio: 'inherit',
-  });
-  bundledServer.once('exit', (code, signal) => {
-    startupExit = { code, signal };
-    bundledServer = null;
-  });
-  bundledServer.once('error', (error) => {
-    console.error('Bundled API server failed to start', error);
-  });
-
-  const isReady = await waitForBundledServer(`${buildLocalUrl(serverPort)}/api/health`);
-  if (!isReady) {
-    stopBundledServer();
-    dialog.showErrorBox(
-      'Squared failed to start',
-      `${getBundledServerStartupError(startupExit)} Please reopen the app and try again.`,
-    );
-    throw new Error('Bundled server did not become ready.');
-  }
-
-  return serverPort;
 }
 
 function ensureTray(paths: ReturnType<typeof getElectronPaths>): void {
@@ -325,6 +253,22 @@ async function createWindows(): Promise<void> {
     );
   });
 
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isDev && url.startsWith(paths.devServerUrl)) return;
+    if (!isDev && url.startsWith('file://')) return;
+    if (!isAllowedExternalAuthUrl(url)) return;
+
+    event.preventDefault();
+    void shell.openExternal(normalizeDesktopAuthUrl(url));
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalAuthUrl(url)) {
+      void shell.openExternal(normalizeDesktopAuthUrl(url));
+    }
+    return { action: 'deny' };
+  });
+
   pillWindow = createPillWindow(paths.preloadPath, paths.statusPillHtmlPath);
   subtitlesWindow = createSubtitlesWindow(paths.preloadPath, paths.subtitlesHtmlPath);
   ipcRegistration = registerIpc(mainWindow, pillWindow, subtitlesWindow, {
@@ -342,11 +286,11 @@ async function createWindows(): Promise<void> {
   });
   ensureTray(paths);
 
-  const appUrl = isDev ? paths.devServerUrl : getPackagedHostedAppUrl(paths);
   if (isDev) {
-    await ensureBundledServer();
+    await mainWindow.loadURL(paths.devServerUrl);
+  } else {
+    await mainWindow.loadFile(path.join(paths.frontendDistDir, 'index.html'));
   }
-  await mainWindow.loadURL(appUrl);
 
   // Ensure dock icon stays visible on macOS
   if (process.platform === 'darwin' && app.dock) {
@@ -361,14 +305,52 @@ async function createWindows(): Promise<void> {
     subtitlesWindow = null;
     ipcRegistration = null;
   });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    void syncDesktopSessionToRenderer();
+  });
 }
 
 // --- Deep-link / custom protocol auth flow ---
 
-function getAppUrl(): string {
-  const paths = getElectronPaths();
-  if (isDev) return paths.devServerUrl;
-  return getPackagedHostedAppUrl(paths);
+function resolveBackendBaseUrl(): string {
+  const backendBaseUrl = resolveConfiguredBackendBaseUrl();
+  if (backendBaseUrl) return backendBaseUrl;
+
+  dialog.showErrorBox(
+    'Squared requires a backend URL',
+    'Desktop uses the bundled frontend, but it still needs the backend base URL for auth and API requests. Configure APP_URL or dist-resources/electron/runtime-config.json.',
+  );
+  throw new Error('A backend base URL is required for desktop communication.');
+}
+
+function normalizeDesktopAuthUrl(url: string): string {
+  const parsed = new URL(url);
+  if (parsed.pathname === '/api/auth/google' && !parsed.searchParams.has('platform')) {
+    parsed.searchParams.set('platform', 'desktop');
+  }
+  return parsed.toString();
+}
+
+function isAllowedExternalAuthUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(normalizeDesktopAuthUrl(url));
+  } catch {
+    return false;
+  }
+
+  const backendBaseUrl = resolveConfiguredBackendBaseUrl();
+  if (!backendBaseUrl) return false;
+
+  let backendOrigin: string;
+  try {
+    backendOrigin = new URL(backendBaseUrl).origin;
+  } catch {
+    return false;
+  }
+
+  return parsed.origin === backendOrigin && parsed.pathname === '/api/auth/google';
 }
 
 async function handleAuthDeepLink(url: string): Promise<void> {
@@ -389,24 +371,26 @@ async function handleAuthDeepLink(url: string): Promise<void> {
 
   const sessionId = parsed.searchParams.get('session');
   if (!sessionId) return;
+  desktopSessionId = sessionId;
 
   // Set the session cookie in Electron's session so the webview is authenticated
-  const appUrl = getAppUrl();
+  const backendBaseUrl = resolveBackendBaseUrl();
   await session.defaultSession.cookies.set({
-    url: appUrl,
+    url: backendBaseUrl,
     name: 'sq_session',
     value: sessionId,
     path: '/',
     httpOnly: true,
-    secure: appUrl.startsWith('https'),
+    secure: backendBaseUrl.startsWith('https'),
     sameSite: 'lax',
     expirationDate: Math.floor((Date.now() + 30 * 24 * 60 * 60 * 1000) / 1000),
   });
 
   // Reload the main window to pick up the authenticated session
   if (mainWindow && !mainWindow.isDestroyed()) {
+    await syncDesktopSessionToRenderer();
     focusMainWindow();
-    mainWindow.loadURL(appUrl);
+    mainWindow.reload();
   }
 }
 
@@ -443,17 +427,15 @@ app.on('open-url', (event, url) => {
 
 // IPC handler: open auth URL in system browser (validated to auth endpoints only)
 ipcMain.on('auth:open-external', (_event, url: string) => {
-  try {
-    const parsed = new URL(url);
-    const allowedProtocol = parsed.protocol === 'https:' || (isDev && parsed.protocol === 'http:');
-    if (allowedProtocol && parsed.pathname === '/api/auth/google') {
-      void shell.openExternal(url);
-    } else {
-      console.warn('Blocked openExternal for disallowed URL:', url);
-    }
-  } catch {
-    console.warn('Blocked openExternal for invalid URL:', url);
+  if (isAllowedExternalAuthUrl(url)) {
+    void shell.openExternal(normalizeDesktopAuthUrl(url));
+  } else {
+    console.warn('Blocked openExternal for disallowed URL:', url);
   }
+});
+
+ipcMain.on('runtime-config:get', (event) => {
+  event.returnValue = readRuntimeConfig();
 });
 
 app.whenReady().then(() => {
@@ -483,5 +465,4 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   trayRegistration?.destroy();
   trayRegistration = null;
-  stopBundledServer();
 });

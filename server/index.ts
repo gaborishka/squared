@@ -17,8 +17,8 @@ import { runsRouter } from './routes/runs.js';
 const app = express();
 
 const allowedOrigins = new Set<string>();
-const appUrl = process.env.APP_URL?.replace(/\/$/, '');
-if (appUrl) allowedOrigins.add(appUrl);
+const publicBaseUrl = process.env.APP_URL?.replace(/\/$/, '');
+if (publicBaseUrl) allowedOrigins.add(publicBaseUrl);
 // Always allow local development origins
 allowedOrigins.add('http://localhost:3000');
 allowedOrigins.add('http://localhost:5173');
@@ -27,8 +27,8 @@ allowedOrigins.add('http://127.0.0.1:5173');
 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. same-origin, server-to-server, Electron)
-    if (!origin || allowedOrigins.has(origin)) {
+    // Allow requests with no origin or `Origin: null` (e.g. same-origin, server-to-server, packaged Electron file://)
+    if (!origin || origin === 'null' || allowedOrigins.has(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));

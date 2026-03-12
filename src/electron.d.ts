@@ -5,6 +5,9 @@ declare global {
     squaredElectron?: {
       isElectron: boolean;
       platform?: string;
+      runtimeConfig?: {
+        apiBaseUrl?: string;
+      };
       openExternalAuth: (url: string) => void;
       updatePill: (state: PillState) => void;
       updateSubtitles: (state: SubtitleState) => void;

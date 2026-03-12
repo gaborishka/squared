@@ -1,9 +1,20 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopAppStatus, PillState, SubtitleState } from '../shared/types.js';
 
+function readRuntimeConfig(): { apiBaseUrl?: string } {
+  try {
+    return ipcRenderer.sendSync('runtime-config:get') as { apiBaseUrl?: string };
+  } catch {
+    return {};
+  }
+}
+
+const runtimeConfig = readRuntimeConfig();
+
 contextBridge.exposeInMainWorld('squaredElectron', {
   isElectron: true,
   platform: process.platform,
+  runtimeConfig,
 
   // Auth: open URL in system browser for Google sign-in
   openExternalAuth: (url: string) => ipcRenderer.send('auth:open-external', url),

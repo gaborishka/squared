@@ -20,14 +20,16 @@ function runStep(args) {
 }
 
 async function writeDesktopRuntimeConfig() {
-  const hostedAppUrl = process.env.APP_URL?.trim();
-  if (!hostedAppUrl) {
-    throw new Error('APP_URL is required to package the hosted Electron desktop app.');
+  const backendBaseUrl =
+    process.env.DESKTOP_API_BASE_URL?.trim()
+    || process.env.VITE_API_BASE_URL?.trim()
+    || process.env.APP_URL?.trim();
+  if (!backendBaseUrl) {
+    throw new Error('DESKTOP_API_BASE_URL, VITE_API_BASE_URL, or APP_URL is required to package the desktop app. It should point at the backend base URL desktop should use.');
   }
-
   const runtimeConfigPath = path.resolve(projectRoot, 'dist-resources/electron/runtime-config.json');
   await fs.mkdir(path.dirname(runtimeConfigPath), { recursive: true });
-  await fs.writeFile(runtimeConfigPath, JSON.stringify({ hostedAppUrl }, null, 2));
+  await fs.writeFile(runtimeConfigPath, JSON.stringify({ apiBaseUrl: backendBaseUrl }, null, 2));
 }
 
 runStep(['run', 'clean']);

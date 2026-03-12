@@ -7,11 +7,23 @@ import { SESSION_COOKIE, requireAuth } from '../middleware/auth.js';
 
 export const authRouter = Router();
 
-function getOAuthClient(): OAuth2Client {
+function resolveAuthCallbackBaseUrl(platform: 'desktop' | 'web'): string {
+  if (platform === 'desktop') {
+    return (
+      process.env.DESKTOP_API_BASE_URL?.trim()
+      || process.env.VITE_API_BASE_URL?.trim()
+      || process.env.APP_URL?.trim()
+      || 'http://127.0.0.1:3001'
+    ).replace(/\/$/, '');
+  }
+
+  return (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
+}
+
+function getOAuthClient(platform: 'desktop' | 'web'): OAuth2Client {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const appUrl = (process.env.APP_URL || 'http://localhost:5173').replace(/\/$/, '');
-  const redirectUri = `${appUrl}/api/auth/callback`;
+  const redirectUri = `${resolveAuthCallbackBaseUrl(platform)}/api/auth/callback`;
 
   if (!clientId || !clientSecret) {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required.');
@@ -37,8 +49,8 @@ function cleanExpiredFlows(): void {
 }
 
 function isSecureContext(): boolean {
-  const appUrl = process.env.APP_URL || '';
-  return appUrl.startsWith('https') || process.env.NODE_ENV === 'production';
+  const publicBaseUrl = process.env.APP_URL || '';
+  return publicBaseUrl.startsWith('https') || process.env.NODE_ENV === 'production';
 }
 
 function cookieOptions(secure: boolean) {
@@ -52,9 +64,9 @@ function cookieOptions(secure: boolean) {
 }
 
 authRouter.get('/google', (req, res) => {
-  const client = getOAuthClient();
-  const state = crypto.randomBytes(32).toString('hex');
   const platform = req.query.platform === 'desktop' ? 'desktop' : 'web';
+  const client = getOAuthClient(platform);
+  const state = crypto.randomBytes(32).toString('hex');
   const secure = isSecureContext();
 
   // Store nonce + platform in memory (works regardless of cookie domain)
@@ -106,7 +118,8 @@ authRouter.get('/callback', async (req, res) => {
   }
 
   try {
-    const client = getOAuthClient();
+    const oauthPlatform = platform === 'desktop' ? 'desktop' : 'web';
+    const client = getOAuthClient(oauthPlatform);
     const clientId = process.env.GOOGLE_CLIENT_ID;
     if (!clientId) {
       throw new Error('GOOGLE_CLIENT_ID is not configured.');
@@ -143,8 +156,8 @@ authRouter.get('/callback', async (req, res) => {
     // Claim any orphan records from before auth was added
     await claimOrphanRecords(user!.id);
 
-    // Create session (256-bit token for high-entropy session secret)
-    const sessionId = crypto.randomBytes(32).toString('hex');
+    // Sessions are stored in a UUID column, so the cookie token must match that format.
+    const sessionId = crypto.randomUUID();
     const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_MS);
     await queryRows(
       `INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)`,

@@ -5,6 +5,10 @@ import { api } from '../api/client';
 import { ParticleBackground } from './ParticleBackground';
 
 export function LandingPage() {
+  const isElectronApp = Boolean(window.squaredElectron?.isElectron);
+  const authBaseUrl = api.getAuthBaseUrl() || window.location.origin;
+  const authUrl = `${authBaseUrl}/api/auth/google${isElectronApp ? '?platform=desktop' : ''}`;
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-50 flex flex-col overflow-hidden relative">
       {/* Particle network background */}
@@ -70,12 +74,10 @@ export function LandingPage() {
 
           {/* CTA */}
           <a
-            href={`${api.getAuthBaseUrl()}/api/auth/google`}
+            href={authUrl}
             onClick={(e) => {
-              if (window.squaredElectron?.isElectron) {
+              if (isElectronApp) {
                 e.preventDefault();
-                const base = api.getAuthBaseUrl() || window.location.origin;
-                const authUrl = `${base}/api/auth/google?platform=desktop`;
                 window.squaredElectron.openExternalAuth(authUrl);
               }
             }}

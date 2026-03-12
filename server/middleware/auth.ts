@@ -11,9 +11,10 @@ declare global {
 }
 
 export const SESSION_COOKIE = 'sq_session';
+export const DESKTOP_SESSION_HEADER = 'x-squared-session';
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-  const sessionId = req.cookies?.[SESSION_COOKIE];
+  const sessionId = req.cookies?.[SESSION_COOKIE] || req.header(DESKTOP_SESSION_HEADER);
   if (!sessionId) {
     res.status(401).json({ error: 'Not authenticated.' });
     return;

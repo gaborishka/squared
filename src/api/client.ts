@@ -15,6 +15,8 @@ import type {
 export function getApiBaseUrl(): string {
   const envBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
   if (envBase) return envBase;
+  const electronBase = window.squaredElectron?.runtimeConfig?.apiBaseUrl?.trim();
+  if (electronBase) return electronBase.replace(/\/$/, '');
   if (typeof window === 'undefined') return 'http://127.0.0.1:3001';
   if (window.location.protocol === 'file:') return 'http://127.0.0.1:3001';
   // In dev, Vite proxy forwards /api to the backend; in production, same origin
@@ -22,9 +24,34 @@ export function getApiBaseUrl(): string {
 }
 
 export const API_BASE_URL = getApiBaseUrl();
+const DESKTOP_SESSION_STORAGE_KEY = 'sq_desktop_session';
+
+function getDesktopSessionId(): string | null {
+  if (!window.squaredElectron?.isElectron) return null;
+  try {
+    return window.localStorage.getItem(DESKTOP_SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function clearDesktopSessionId(): void {
+  if (!window.squaredElectron?.isElectron) return;
+  try {
+    window.localStorage.removeItem(DESKTOP_SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...init });
+  const headers = new Headers(init?.headers);
+  const desktopSessionId = getDesktopSessionId();
+  if (desktopSessionId) {
+    headers.set('x-squared-session', desktopSessionId);
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}`, { credentials: 'include', ...init, headers });
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(errorText || `Request failed with ${response.status}`);
@@ -104,6 +131,12 @@ export const api = {
   getProjectSlidePreviewUrl: (id: string, slideNumber: number) =>
     `${API_BASE_URL}/api/projects/${id}/slides/${slideNumber}/preview`,
   getCurrentUser: () => requestJson<import('../types').AuthUser>('/api/auth/me'),
-  logout: () => requestJson<void>('/api/auth/logout', { method: 'POST' }),
+  logout: async () => {
+    try {
+      await requestJson<void>('/api/auth/logout', { method: 'POST' });
+    } finally {
+      clearDesktopSessionId();
+    }
+  },
   getAuthBaseUrl: () => API_BASE_URL,
 };
