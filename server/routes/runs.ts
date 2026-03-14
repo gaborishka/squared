@@ -102,13 +102,18 @@ runsRouter.post('/', async (req, res) => {
     return;
   }
 
-  const saved = await attachRunReport(await saveRun(payload, req.user!.id));
-  res.status(201).json(saved);
+  try {
+    const saved = await attachRunReport(await saveRun(payload, req.user!.id));
+    res.status(201).json(saved);
 
-  if (payload.run.projectId) {
-    void indexRunMemory(payload.run.id).catch((error) => {
-      console.error(`Failed to index run memory for ${payload.run.id}:`, error);
-    });
+    if (payload.run.projectId) {
+      void indexRunMemory(payload.run.id).catch((error) => {
+        console.error(`Failed to index run memory for ${payload.run.id}:`, error);
+      });
+    }
+  } catch (error) {
+    console.error('Failed to save run:', error);
+    res.status(500).json({ error: 'Failed to save run.' });
   }
 });
 

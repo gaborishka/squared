@@ -29,7 +29,8 @@ async function writeDesktopRuntimeConfig() {
   }
   const runtimeConfigPath = path.resolve(projectRoot, 'dist-resources/electron/runtime-config.json');
   await fs.mkdir(path.dirname(runtimeConfigPath), { recursive: true });
-  await fs.writeFile(runtimeConfigPath, JSON.stringify({ apiBaseUrl: backendBaseUrl }, null, 2));
+  const capturableOverlays = process.env.VITE_FORCE_OVERLAY === 'true';
+  await fs.writeFile(runtimeConfigPath, JSON.stringify({ apiBaseUrl: backendBaseUrl, capturableOverlays }, null, 2));
 }
 
 runStep(['run', 'clean']);

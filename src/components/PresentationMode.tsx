@@ -290,23 +290,23 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
         </div>
       </header>
 
-      <main className="flex-1 flex gap-0 min-h-0">
+      <main className="flex-1 flex gap-0 min-h-0 overflow-hidden">
         {/* Video area */}
         <section className="flex-1 relative m-3 mr-0 rounded-2xl overflow-hidden bg-zinc-900">
           <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           {indicators && <CameraOverlay data={indicators} variant="presentation" />}
 
           {/* Control bar */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-zinc-950/80 backdrop-blur-xl p-1.5 rounded-2xl z-10 shadow-2xl">
+          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-zinc-950/80 backdrop-blur-xl p-2 rounded-2xl z-10 shadow-2xl">
             {isConnected && (
-              <div className="flex items-center gap-1.5 px-3 text-xs text-zinc-400 tabular-nums">
-                <Clock3 className="w-3 h-3" />
+              <div className="flex items-center gap-1.5 px-3 text-sm text-zinc-400 tabular-nums">
+                <Clock3 className="w-3.5 h-3.5" />
                 {elapsed}
               </div>
             )}
             <button
               onClick={handleToggleConnect}
-              className={`h-10 px-5 rounded-xl font-medium text-sm flex items-center gap-2 transition-all ${
+              className={`h-12 px-6 rounded-xl font-medium text-base flex items-center gap-2 transition-all ${
                 isConnected || isConnecting
                   ? 'bg-red-500/15 text-red-400 hover:bg-red-500/25'
                   : 'bg-emerald-600 text-white hover:bg-emerald-500'
@@ -314,12 +314,12 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
             >
               {isConnected || isConnecting ? (
                 <>
-                  <Phone className="w-3.5 h-3.5 rotate-[135deg]" />
+                  <Phone className="w-4 h-4 rotate-[135deg]" />
                   End
                 </>
               ) : (
                 <>
-                  <Presentation className="w-3.5 h-3.5" />
+                  <Presentation className="w-4 h-4" />
                   Start
                 </>
               )}
@@ -331,9 +331,9 @@ export function PresentationMode({ project, gamePlan, onBack, onSessionEnd }: Pr
                   setMainWindowHidden(true);
                   mainWindowHiddenRef.current = true;
                 }}
-                className="h-10 px-4 rounded-xl font-medium text-sm flex items-center gap-2 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all"
+                className="h-12 px-5 rounded-xl font-medium text-base flex items-center gap-2 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all"
               >
-                <Presentation className="w-3.5 h-3.5" />
+                <Presentation className="w-4 h-4" />
                 Hide & Present
               </button>
             )}

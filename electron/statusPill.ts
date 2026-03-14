@@ -13,7 +13,7 @@ function getPillBounds() {
   };
 }
 
-export function createPillWindow(preloadPath: string, htmlPath: string): BrowserWindow {
+export function createPillWindow(preloadPath: string, htmlPath: string, capturable = false): BrowserWindow {
   const bounds = getPillBounds();
   const window = new BrowserWindow({
     ...bounds,
@@ -26,7 +26,7 @@ export function createPillWindow(preloadPath: string, htmlPath: string): Browser
     resizable: false,
     movable: true,
     focusable: false,
-    type: process.platform === 'darwin' ? 'panel' : 'toolbar',
+    type: capturable ? undefined : (process.platform === 'darwin' ? 'panel' : 'toolbar'),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -34,10 +34,11 @@ export function createPillWindow(preloadPath: string, htmlPath: string): Browser
     },
   });
 
-  window.setAlwaysOnTop(true, 'screen-saver');
+  console.log('[pill] capturable =', capturable, '| type =', capturable ? 'default' : (process.platform === 'darwin' ? 'panel' : 'toolbar'));
+  window.setAlwaysOnTop(true, capturable ? 'floating' : 'screen-saver');
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setIgnoreMouseEvents(false);
-  window.setContentProtection(true);
+  if (!capturable) window.setContentProtection(true);
   void window.loadFile(htmlPath);
   return window;
 }

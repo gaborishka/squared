@@ -8,7 +8,7 @@ const LIVE_MODELS: Record<LiveSessionKind, string> = {
 };
 
 const TOKEN_EXPIRE_MS = 30 * 60 * 1000;
-const TOKEN_NEW_SESSION_EXPIRE_MS = 60 * 1000;
+const TOKEN_NEW_SESSION_EXPIRE_MS = 10 * 60 * 1000;
 const TOKEN_USES = 3;
 
 export function isLiveSessionKind(value: string): value is LiveSessionKind {
@@ -45,6 +45,9 @@ export async function createLiveAuthToken(kind: LiveSessionKind): Promise<LiveAu
         model,
         config: {
           responseModalities: [Modality.AUDIO],
+          contextWindowCompression: {
+            slidingWindow: {},
+          },
         },
       },
     },

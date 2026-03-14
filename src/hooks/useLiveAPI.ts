@@ -1163,10 +1163,10 @@ export function useLiveAPI({
             activityHandling: mode === 'presentation'
               ? ActivityHandling.NO_INTERRUPTION
               : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
             automaticActivityDetection: {
               disabled: false,
-              silenceDurationMs: mode === 'presentation' ? 500 : 200,
+              silenceDurationMs: 450,
               prefixPaddingMs: 20,
             },
           },
@@ -1373,10 +1373,10 @@ export function useLiveAPI({
             activityHandling: mode === 'presentation'
               ? ActivityHandling.NO_INTERRUPTION
               : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
             automaticActivityDetection: {
               disabled: false,
-              silenceDurationMs: mode === 'presentation' ? 500 : 200,
+              silenceDurationMs: 450,
               prefixPaddingMs: 20,
             },
           },

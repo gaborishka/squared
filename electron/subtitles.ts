@@ -13,7 +13,7 @@ function getSubtitleBounds() {
   };
 }
 
-export function createSubtitlesWindow(preloadPath: string, htmlPath: string): BrowserWindow {
+export function createSubtitlesWindow(preloadPath: string, htmlPath: string, capturable = false): BrowserWindow {
   const bounds = getSubtitleBounds();
   const window = new BrowserWindow({
     ...bounds,
@@ -26,7 +26,7 @@ export function createSubtitlesWindow(preloadPath: string, htmlPath: string): Br
     resizable: false,
     movable: false,
     focusable: false,
-    type: process.platform === 'darwin' ? 'panel' : 'toolbar',
+    type: capturable ? undefined : (process.platform === 'darwin' ? 'panel' : 'toolbar'),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -34,10 +34,11 @@ export function createSubtitlesWindow(preloadPath: string, htmlPath: string): Br
     },
   });
 
-  window.setAlwaysOnTop(true, 'screen-saver');
+  console.log('[subtitles] capturable =', capturable);
+  window.setAlwaysOnTop(true, capturable ? 'floating' : 'screen-saver');
   window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   window.setIgnoreMouseEvents(true, { forward: true });
-  window.setContentProtection(true);
+  if (!capturable) window.setContentProtection(true);
   void window.loadFile(htmlPath);
   return window;
 }

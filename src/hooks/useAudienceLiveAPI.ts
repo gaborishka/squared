@@ -503,10 +503,10 @@ export function useAudienceLiveAPI({
           },
           realtimeInputConfig: {
             activityHandling: ActivityHandling.NO_INTERRUPTION,
-            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
             automaticActivityDetection: {
               disabled: false,
-              silenceDurationMs: 400,
+              silenceDurationMs: 2500,
               prefixPaddingMs: 20,
             },
           },
@@ -674,10 +674,10 @@ export function useAudienceLiveAPI({
           },
           realtimeInputConfig: {
             activityHandling: ActivityHandling.NO_INTERRUPTION,
-            turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            turnCoverage: TurnCoverage.TURN_INCLUDES_ALL_INPUT,
             automaticActivityDetection: {
               disabled: false,
-              silenceDurationMs: 400,
+              silenceDurationMs: 2500,
               prefixPaddingMs: 20,
             },
           },

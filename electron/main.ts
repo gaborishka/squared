@@ -21,10 +21,10 @@ let appStatus: DesktopAppStatus = { mode: 'idle', connected: false };
 let desktopSessionId: string | null = null;
 const isDev = !app.isPackaged;
 
-function readRuntimeConfig(): { apiBaseUrl?: string } {
+function readRuntimeConfig(): { apiBaseUrl?: string; capturableOverlays?: boolean } {
   try {
     const raw = fs.readFileSync(getElectronPaths().runtimeConfigPath, 'utf8');
-    return JSON.parse(raw) as { apiBaseUrl?: string };
+    return JSON.parse(raw) as { apiBaseUrl?: string; capturableOverlays?: boolean };
   } catch (error) {
     console.error('Failed to read desktop runtime config', error);
     return {};
@@ -269,8 +269,10 @@ async function createWindows(): Promise<void> {
     return { action: 'deny' };
   });
 
-  pillWindow = createPillWindow(paths.preloadPath, paths.statusPillHtmlPath);
-  subtitlesWindow = createSubtitlesWindow(paths.preloadPath, paths.subtitlesHtmlPath);
+  const capturable = readRuntimeConfig().capturableOverlays === true;
+  console.log('[squared] capturableOverlays =', capturable);
+  pillWindow = createPillWindow(paths.preloadPath, paths.statusPillHtmlPath, capturable);
+  subtitlesWindow = createSubtitlesWindow(paths.preloadPath, paths.subtitlesHtmlPath, capturable);
   ipcRegistration = registerIpc(mainWindow, pillWindow, subtitlesWindow, {
     getOverlayEnabled: () => overlayEnabled,
     onStatusUpdate: (status) => {
