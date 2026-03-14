@@ -115,6 +115,40 @@ Optional:
 - **Desktop:** Electron 36
 - **Infrastructure:** GCP Cloud Run, Cloud SQL, Secret Manager, Artifact Registry, Terraform
 
+## Architecture
+
+### Component Architecture
+
+<p align="center">
+  <img src="docs/architecture/Squared — Component Architecture.png" alt="Component Architecture" />
+</p>
+
+`App.tsx` routes to three top-level views: **Home** (dashboard with project setup, run analysis, and game plan), **RehearsalMode** (interactive voice coaching via `useLiveAPI`), and **PresentationMode** (silent HUD overlay). Desktop builds add Electron-only components like `DualAgentOverlay` and the Delivery/Audience APIs.
+
+### Real-Time Data Flow
+
+<p align="center">
+  <img src="docs/architecture/Squared — Real-Time Data Flow.png" alt="Real-Time Data Flow" />
+</p>
+
+Microphone audio (PCM 16 kHz via AudioWorklet) and camera frames (0.5 fps canvas captures) stream over WebSocket to **Gemini 2.5 Flash Live API**. Gemini returns tool calls (`updateIndicators`), AI voice audio, and transcripts. Local **MediaPipe** analysis (468 face + 33 pose landmarks) runs in parallel for eye contact and posture detection. Post-session data persists through the Express API with **pgvector** embeddings for cross-run memory retrieval.
+
+### API Sequence Diagram
+
+<p align="center">
+  <img src="docs/architecture/Squared — API Sequence Diagram.png" alt="API Sequence Diagram" />
+</p>
+
+Four phases: **Authentication** (Google OAuth callback flow), **Project Setup** (create project + upload PPTX slides), **Live Session** (server mints ephemeral Gemini token, browser opens WebSocket stream), and **Post-Session** (persist run data, generate game plan, compute embeddings for memory similarity).
+
+### GCP Infrastructure
+
+<p align="center">
+  <img src="docs/architecture/Squared — GCP Infrastructure.png" alt="GCP Infrastructure" />
+</p>
+
+Cloud Run (Node.js 22) serves both the React frontend and Express API. Cloud SQL (PostgreSQL 17 + pgvector) connects via private VPC peering. Secret Manager stores all credentials (Gemini key, OAuth secrets, DB password) with IAM-scoped access. Artifact Registry holds Docker images; GCS stores Terraform state.
+
 ## Notes
 
 - Cloud Run reads runtime secrets from Secret Manager.
