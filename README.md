@@ -1,6 +1,27 @@
-# Squared
+<p align="center">
+  <img src="logo-squared-v5.svg" alt="Squared" width="160" />
+</p>
 
-Squared is an AI speech-coaching app with live rehearsal feedback, presentation HUD overlays, saved run history, and project memory grounded by Gemini.
+<h1 align="center">Squared</h1>
+
+<p align="center">
+  AI-powered real-time speech coaching built on Google Gemini 2.5 Flash Live API
+</p>
+
+<p align="center">
+  <a href="https://squared-j2gx3ygtta-uc.a.run.app/">Live App</a> · <a href="https://www.youtube.com/watch?v=8bbCrbCSGy0">Demo Video</a>
+</p>
+
+---
+
+Squared helps speakers improve through two real-time modes:
+
+- **Rehearsal** — interactive voice feedback where the AI coach listens, watches, and interrupts with coaching cues
+- **Presentation** — silent visual-only HUD overlay for live presentations with real-time metrics
+
+Additional capabilities include saved run history, project memory grounded by Gemini, and a native desktop (Electron) client.
+
+Requires camera and microphone permissions.
 
 ## Local development
 
@@ -87,8 +108,19 @@ Optional:
 - `TF_STATE_BUCKET_LOCATION`
 - `TF_STATE_PREFIX`
 
+## Tech stack
+
+- **Frontend:** React 19, TypeScript, Vite 6, Tailwind CSS 4, Motion (animations), Lucide React (icons)
+- **Backend:** Express 5, PostgreSQL, Google Gemini Live API
+- **Desktop:** Electron 36
+- **Infrastructure:** GCP Cloud Run, Cloud SQL, Secret Manager, Artifact Registry, Terraform
+
 ## Notes
 
 - Cloud Run reads runtime secrets from Secret Manager.
 - Cloud SQL uses private connectivity through Serverless VPC Access; desktop production goes through the hosted app instead of any direct DB path.
-- Browser Live sessions now use short-lived server-minted Gemini auth tokens instead of exposing the long-lived API key in the frontend bundle.
+- Browser Live sessions use short-lived server-minted Gemini auth tokens instead of exposing the long-lived API key in the frontend bundle.
+
+## License
+
+MIT
