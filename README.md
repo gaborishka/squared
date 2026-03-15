@@ -23,6 +23,23 @@ Additional capabilities include saved run history, project memory grounded by Ge
 
 Requires camera and microphone permissions.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Landing Page](docs/screenshots/CleanShot%202026-03-14%20at%2022.58.24@2x.png) | ![Project Dashboard](docs/screenshots/CleanShot%202026-03-14%20at%2022.59.01@2x.png) |
+| **Landing Page** — Google OAuth sign-in | **Project Dashboard** — deck preview, stats, and session launcher |
+| ![Rehearsal Mode](docs/screenshots/CleanShot%202026-03-14%20at%2023.01.11@2x.png) | ![Run Analysis](docs/screenshots/CleanShot%202026-03-14%20at%2023.01.19@2x.png) |
+| **Rehearsal Mode** — live metrics HUD with AI voice coaching | **Run Analysis** — post-session score breakdown and actionable insights |
+| ![Session History](docs/screenshots/CleanShot%202026-03-14%20at%2023.01.28@2x.png) | ![Game Plan](docs/screenshots/CleanShot%202026-03-14%20at%2023.01.42@2x.png) |
+| **Session History** — all rehearsal runs with scores and trends | **Game Plan** — per-slide breakdown with issues, cues, and recovery notes |
+| ![Predicted Questions](docs/screenshots/CleanShot%202026-03-14%20at%2023.01.53@2x.png) | ![Desktop Audience Agent](docs/screenshots/CleanShot%202026-03-14%20at%2023.02.11@2x.png) |
+| **Predicted Questions** — AI-generated audience questions with suggested answers | **Desktop Audience Agent** — screen capture selector for live audience monitoring |
+| ![Desktop Rehearsal with Delivery Cues](docs/screenshots/CleanShot%202026-03-14%20at%2023.02.23@2x.png) | ![Desktop Rehearsal with Pattern Memory](docs/screenshots/CleanShot%202026-03-14%20at%2023.02.33@2x.png) |
+| **Delivery Cues** — real-time audience-aware coaching overlay | **Pattern Memory** — cross-session coaching that remembers past performance |
+| ![Terraform Deploy](docs/screenshots/CleanShot%202026-03-14%20at%2023.33.22@2x.png) | |
+| **Infrastructure Deploy** — one-command Terraform + Cloud Run deployment | |
+
 ## Local development
 
 ### Prerequisites
